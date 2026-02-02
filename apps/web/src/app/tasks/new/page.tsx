@@ -3,15 +3,17 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useAccount } from 'wagmi';
+import { useAccount, useSignMessage } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { Header } from '@/components/Header';
+import { buildAuthHeaders } from '@/lib/auth';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://clawedescrow-production.up.railway.app';
 
 export default function NewTask() {
   const router = useRouter();
   const { address, isConnected } = useAccount();
+  const { signMessageAsync } = useSignMessage();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -44,9 +46,17 @@ export default function NewTask() {
     };
 
     try {
+      const headers = await buildAuthHeaders({
+        address,
+        signMessageAsync,
+        method: 'POST',
+        path: '/v1/tasks',
+        body: task,
+      });
+
       const res = await fetch(`${API_URL}/v1/tasks`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(task),
       });
 

@@ -2,14 +2,16 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAccount } from 'wagmi';
+import { useAccount, useSignMessage } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { buildAuthHeaders } from '@/lib/auth';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://clawedescrow-production.up.railway.app';
 
 export default function TaskActions({ taskId, status }: { taskId: string; status: string }) {
   const router = useRouter();
   const { address, isConnected } = useAccount();
+  const { signMessageAsync } = useSignMessage();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [claimId, setClaimId] = useState('');
@@ -20,13 +22,19 @@ export default function TaskActions({ taskId, status }: { taskId: string; status
     setError('');
 
     try {
+      const body = { wallet: address, agent: { type: 'wallet', id: address } };
+      const headers = await buildAuthHeaders({
+        address,
+        signMessageAsync,
+        method: 'POST',
+        path: `/v1/tasks/${taskId}/claim`,
+        body,
+      });
+
       const res = await fetch(`${API_URL}/v1/tasks/${taskId}/claim`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          wallet: address,
-          agent: { type: 'wallet', id: address },
-        }),
+        headers,
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -53,13 +61,20 @@ export default function TaskActions({ taskId, status }: { taskId: string; status
     const formData = new FormData(form);
 
     try {
-      const res = await fetch(`${API_URL}/v1/claims/${formData.get('claimId')}/submit`, {
+      const claimId = String(formData.get('claimId'));
+      const body = { kind: 'url', payload: formData.get('proof') };
+      const headers = await buildAuthHeaders({
+        address: address!,
+        signMessageAsync,
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          kind: 'url',
-          payload: formData.get('proof'),
-        }),
+        path: `/v1/claims/${claimId}/submit`,
+        body,
+      });
+
+      const res = await fetch(`${API_URL}/v1/claims/${claimId}/submit`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -84,8 +99,20 @@ export default function TaskActions({ taskId, status }: { taskId: string; status
     const formData = new FormData(form);
 
     try {
-      const res = await fetch(`${API_URL}/v1/claims/${formData.get('claimId')}/approve`, {
+      const claimId = String(formData.get('claimId'));
+      const body = {};
+      const headers = await buildAuthHeaders({
+        address: address!,
+        signMessageAsync,
         method: 'POST',
+        path: `/v1/claims/${claimId}/approve`,
+        body,
+      });
+
+      const res = await fetch(`${API_URL}/v1/claims/${claimId}/approve`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -106,8 +133,19 @@ export default function TaskActions({ taskId, status }: { taskId: string; status
     setError('');
 
     try {
+      const body = {};
+      const headers = await buildAuthHeaders({
+        address: address!,
+        signMessageAsync,
+        method: 'POST',
+        path: `/v1/claims/${claimIdToReject}/reject`,
+        body,
+      });
+
       const res = await fetch(`${API_URL}/v1/claims/${claimIdToReject}/reject`, {
         method: 'POST',
+        headers,
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
