@@ -2,17 +2,21 @@ import express from 'express';
 import { z } from 'zod';
 import pg from 'pg';
 import { ethers } from 'ethers';
+import crypto from 'crypto';
 
 const { Pool } = pg;
 
 const PORT = process.env.PORT || 8787;
 const DATABASE_URL = process.env.DATABASE_URL;
-const FEE_BPS = parseInt(process.env.FEE_BPS || '200'); // 2% default
+const FEE_BPS = parseInt(process.env.FEE_BPS || '200');
 const HD_MNEMONIC = process.env.HD_MNEMONIC;
 const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 const USDC_ADDRESS = process.env.USDC_ADDRESS || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const FUNDING_CONFIRMATIONS = parseInt(process.env.FUNDING_CONFIRMATIONS || '6');
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY; // For AI judge
+const MIN_REP_HIGH_VALUE = parseInt(process.env.MIN_REP_HIGH_VALUE || '5'); // Min rep for tasks > 10 USDC
+const HIGH_VALUE_THRESHOLD = parseFloat(process.env.HIGH_VALUE_THRESHOLD || '10');
 
 if (!DATABASE_URL) {
   console.error('DATABASE_URL is required');
@@ -20,21 +24,148 @@ if (!DATABASE_URL) {
 }
 
 const pool = new Pool({ connectionString: DATABASE_URL });
-
-// Base provider for funding checks
 const provider = new ethers.JsonRpcProvider(BASE_RPC_URL);
-
-// USDC ABI (just Transfer event)
 const USDC_ABI = ['event Transfer(address indexed from, address indexed to, uint256 value)'];
 
-// HD Wallet for deposit address derivation
 let hdWallet = null;
 if (HD_MNEMONIC) {
   hdWallet = ethers.HDNodeWallet.fromPhrase(HD_MNEMONIC);
   console.log('[wallet] HD wallet initialized');
 }
 
-// Initialize tables
+// ============ SECURITY: Rate Limiting ============
+const rateLimits = new Map(); // IP -> { count, resetAt }
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX = 100; // 100 requests per minute
+
+function rateLimit(req, res, next) {
+  const ip = req.ip || req.connection.remoteAddress || 'unknown';
+  const now = Date.now();
+  
+  let record = rateLimits.get(ip);
+  if (!record || now > record.resetAt) {
+    record = { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+    rateLimits.set(ip, record);
+  }
+  
+  record.count++;
+  
+  if (record.count > RATE_LIMIT_MAX) {
+    return res.status(429).json({ error: 'rate_limit_exceeded', retryAfter: Math.ceil((record.resetAt - now) / 1000) });
+  }
+  
+  next();
+}
+
+// Clean up old rate limit entries periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, record] of rateLimits.entries()) {
+    if (now > record.resetAt) rateLimits.delete(ip);
+  }
+}, 60000);
+
+// ============ SECURITY: Nonce Replay Protection ============
+const usedNonces = new Map(); // nonce -> expiresAt
+const NONCE_WINDOW = 5 * 60 * 1000; // 5 minutes
+
+function isNonceUsed(nonce) {
+  const record = usedNonces.get(nonce);
+  if (!record) return false;
+  if (Date.now() > record) {
+    usedNonces.delete(nonce);
+    return false;
+  }
+  return true;
+}
+
+function markNonceUsed(nonce) {
+  usedNonces.set(nonce, Date.now() + NONCE_WINDOW);
+}
+
+// Clean up old nonces
+setInterval(() => {
+  const now = Date.now();
+  for (const [nonce, expires] of usedNonces.entries()) {
+    if (now > expires) usedNonces.delete(nonce);
+  }
+}, 60000);
+
+// ============ SECURITY: Wallet Signature Auth ============
+const SIGNATURE_WINDOW = 120 * 1000; // 2 minutes
+
+function buildSignMessage({ method, path, timestamp, nonce, bodyHash }) {
+  return `ClawedEscrow\n${method}\n${path}\n${timestamp}\n${nonce}\n${bodyHash}`;
+}
+
+async function walletAuth(req, res, next) {
+  const wallet = req.headers['x-wallet-address'];
+  const signature = req.headers['x-signature'];
+  const timestamp = req.headers['x-timestamp'];
+  const nonce = req.headers['x-nonce'];
+  
+  // Allow unauthenticated for read-only endpoints
+  if (!wallet && !signature) {
+    req.wallet = null;
+    return next();
+  }
+  
+  if (!wallet || !signature || !timestamp || !nonce) {
+    return res.status(401).json({ error: 'missing_auth_headers', required: ['x-wallet-address', 'x-signature', 'x-timestamp', 'x-nonce'] });
+  }
+  
+  // Validate wallet address format
+  if (!/^0x[a-fA-F0-9]{40}$/.test(wallet)) {
+    return res.status(401).json({ error: 'invalid_wallet_address' });
+  }
+  
+  // Check timestamp is within window
+  const ts = parseInt(timestamp);
+  if (isNaN(ts) || Math.abs(Date.now() - ts) > SIGNATURE_WINDOW) {
+    return res.status(401).json({ error: 'timestamp_expired', message: 'Timestamp must be within 2 minutes' });
+  }
+  
+  // Check nonce hasn't been used
+  if (isNonceUsed(nonce)) {
+    return res.status(401).json({ error: 'nonce_already_used' });
+  }
+  
+  // Build message and verify signature
+  const bodyHash = crypto.createHash('sha256').update(JSON.stringify(req.body) || '').digest('hex');
+  const message = buildSignMessage({
+    method: req.method,
+    path: req.path,
+    timestamp,
+    nonce,
+    bodyHash,
+  });
+  
+  try {
+    const recoveredAddress = ethers.verifyMessage(message, signature);
+    if (recoveredAddress.toLowerCase() !== wallet.toLowerCase()) {
+      return res.status(401).json({ error: 'signature_mismatch' });
+    }
+  } catch (err) {
+    return res.status(401).json({ error: 'invalid_signature' });
+  }
+  
+  // Mark nonce as used
+  markNonceUsed(nonce);
+  
+  // Attach wallet to request
+  req.wallet = wallet.toLowerCase();
+  next();
+}
+
+// Require authenticated wallet
+function requireAuth(req, res, next) {
+  if (!req.wallet) {
+    return res.status(401).json({ error: 'authentication_required', message: 'This endpoint requires wallet signature authentication' });
+  }
+  next();
+}
+
+// ============ Database Init ============
 async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tasks (
@@ -47,6 +178,7 @@ async function initDb() {
       payout_currency TEXT NOT NULL,
       fee_amount TEXT,
       required_amount TEXT,
+      verification_type TEXT NOT NULL DEFAULT 'manual',
       requester_type TEXT NOT NULL,
       requester_id TEXT NOT NULL,
       approver_type TEXT NOT NULL,
@@ -71,6 +203,7 @@ async function initDb() {
       submission_kind TEXT,
       submission_payload JSONB,
       submission_hash TEXT,
+      ai_verification_result JSONB,
       claimed_at TIMESTAMPTZ NOT NULL,
       submitted_at TIMESTAMPTZ,
       approved_at TIMESTAMPTZ,
@@ -101,6 +234,7 @@ async function initDb() {
       claims_rejected INTEGER NOT NULL DEFAULT 0,
       total_earned_usdc TEXT NOT NULL DEFAULT '0',
       total_paid_usdc TEXT NOT NULL DEFAULT '0',
+      is_trusted_requester BOOLEAN NOT NULL DEFAULT false,
       created_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL
     );
@@ -122,6 +256,30 @@ async function initDb() {
     );
 
     INSERT INTO deposit_counter (id, next_index) VALUES (1, 0) ON CONFLICT (id) DO NOTHING;
+    
+    -- Add verification_type column if missing
+    DO $$ 
+    BEGIN 
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='tasks' AND column_name='verification_type') THEN
+        ALTER TABLE tasks ADD COLUMN verification_type TEXT NOT NULL DEFAULT 'manual';
+      END IF;
+    END $$;
+    
+    -- Add ai_verification_result column if missing
+    DO $$ 
+    BEGIN 
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='claims' AND column_name='ai_verification_result') THEN
+        ALTER TABLE claims ADD COLUMN ai_verification_result JSONB;
+      END IF;
+    END $$;
+    
+    -- Add is_trusted_requester column if missing
+    DO $$ 
+    BEGIN 
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='wallets' AND column_name='is_trusted_requester') THEN
+        ALTER TABLE wallets ADD COLUMN is_trusted_requester BOOLEAN NOT NULL DEFAULT false;
+      END IF;
+    END $$;
   `);
   console.log('[db] tables initialized');
 }
@@ -129,24 +287,23 @@ async function initDb() {
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
-// CORS for Vercel frontend
+// CORS
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Admin-Key');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Admin-Key, X-Wallet-Address, X-Signature, X-Timestamp, X-Nonce');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
-function nowIso() {
-  return new Date().toISOString();
-}
+// Apply rate limiting and auth to all routes
+app.use(rateLimit);
+app.use(walletAuth);
 
-function uuid() {
-  return crypto.randomUUID();
-}
+// ============ Helpers ============
+function nowIso() { return new Date().toISOString(); }
+function uuid() { return crypto.randomUUID(); }
 
-// Get next deposit index (atomic)
 async function getNextDepositIndex() {
   const result = await pool.query(
     'UPDATE deposit_counter SET next_index = next_index + 1 WHERE id = 1 RETURNING next_index - 1 as index'
@@ -154,39 +311,35 @@ async function getNextDepositIndex() {
   return result.rows[0].index;
 }
 
-// Derive deposit address from index
 function deriveDepositAddress(index) {
   if (!hdWallet) return null;
   const child = hdWallet.derivePath(`m/44'/60'/0'/0/${index}`);
   return child.address;
 }
 
-// Calculate fee and required amount
 function calculateAmounts(payoutAmount) {
   const payout = parseFloat(payoutAmount);
   const fee = (payout * FEE_BPS) / 10000;
   const required = payout + fee;
-  return {
-    fee: fee.toFixed(6),
-    required: required.toFixed(6),
-  };
+  return { fee: fee.toFixed(6), required: required.toFixed(6) };
 }
 
-// Ensure wallet exists in reputation table
 async function ensureWallet(address) {
   const normalized = address.toLowerCase();
   const existing = await pool.query('SELECT * FROM wallets WHERE address = $1', [normalized]);
   if (existing.rows.length === 0) {
     const ts = nowIso();
-    await pool.query(
-      'INSERT INTO wallets (address, created_at, updated_at) VALUES ($1, $2, $3)',
-      [normalized, ts, ts]
-    );
+    await pool.query('INSERT INTO wallets (address, created_at, updated_at) VALUES ($1, $2, $3)', [normalized, ts, ts]);
   }
   return normalized;
 }
 
-// Update wallet reputation
+async function getWalletRep(address) {
+  const normalized = address.toLowerCase();
+  const result = await pool.query('SELECT * FROM wallets WHERE address = $1', [normalized]);
+  return result.rows[0] || null;
+}
+
 async function updateWalletRep(address, field, delta = 1) {
   const normalized = address.toLowerCase();
   await ensureWallet(normalized);
@@ -204,6 +357,68 @@ async function addEvent({ taskId, claimId = null, type, actor, data = {} }) {
   );
 }
 
+// ============ AI Judge Verification ============
+async function aiJudgeVerify(task, claim) {
+  if (!OPENAI_API_KEY) {
+    return { approved: false, reason: 'AI judge not configured', confidence: 0 };
+  }
+  
+  const prompt = `You are an escrow verification judge. Review this task submission and determine if it meets the requirements.
+
+TASK TITLE: ${task.title}
+
+TASK INSTRUCTIONS:
+${task.instructions}
+
+SUBMISSION TYPE: ${claim.submission_kind}
+SUBMISSION CONTENT:
+${JSON.stringify(claim.submission_payload, null, 2)}
+
+Based on the task requirements, does this submission adequately complete the task?
+
+Respond in JSON format:
+{
+  "approved": true/false,
+  "confidence": 0.0-1.0,
+  "reason": "Brief explanation"
+}`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 500,
+        temperature: 0.3,
+      }),
+    });
+    
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    
+    // Parse JSON from response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const result = JSON.parse(jsonMatch[0]);
+      return {
+        approved: result.approved === true,
+        confidence: Math.min(1, Math.max(0, result.confidence || 0)),
+        reason: result.reason || 'No reason provided',
+      };
+    }
+    
+    return { approved: false, reason: 'Failed to parse AI response', confidence: 0 };
+  } catch (err) {
+    console.error('[ai_judge] Error:', err);
+    return { approved: false, reason: `AI judge error: ${err.message}`, confidence: 0 };
+  }
+}
+
 // Admin auth middleware
 function adminAuth(req, res, next) {
   if (!ADMIN_API_KEY) return res.status(500).json({ error: 'admin_not_configured' });
@@ -212,7 +427,7 @@ function adminAuth(req, res, next) {
   next();
 }
 
-// --- Schemas
+// ============ Schemas ============
 const TaskCreate = z.object({
   title: z.string().min(1).max(200),
   instructions: z.string().min(1).max(20000),
@@ -221,6 +436,7 @@ const TaskCreate = z.object({
     amount: z.string().regex(/^\d+(\.\d+)?$/),
     currency: z.literal('USDC_BASE')
   }),
+  verificationType: z.enum(['manual', 'ai_judge']).default('manual'),
   requester: z.object({ type: z.string(), id: z.string() }),
   approver: z.object({ type: z.string(), id: z.string() }).optional(),
   deadlineAt: z.string().datetime().optional()
@@ -236,29 +452,50 @@ const Submit = z.object({
   payload: z.any()
 });
 
-// --- Routes
+// ============ Routes ============
+
 app.get('/health', (req, res) => res.json({ 
   ok: true, 
   now: nowIso(),
   hdWallet: !!hdWallet,
+  aiJudge: !!OPENAI_API_KEY,
   feeBps: FEE_BPS,
+  minRepHighValue: MIN_REP_HIGH_VALUE,
+  highValueThreshold: HIGH_VALUE_THRESHOLD,
 }));
 
-// Create task (status = 'draft' until funded)
-app.post('/v1/tasks', async (req, res) => {
+// Auth info endpoint
+app.get('/v1/auth/info', (req, res) => {
+  res.json({
+    authenticated: !!req.wallet,
+    wallet: req.wallet,
+    signatureFormat: {
+      message: 'ClawedEscrow\\n{method}\\n{path}\\n{timestamp}\\n{nonce}\\n{bodyHash}',
+      headers: ['X-Wallet-Address', 'X-Signature', 'X-Timestamp', 'X-Nonce'],
+      bodyHash: 'SHA256 of JSON body',
+      timestampWindow: '120 seconds',
+    }
+  });
+});
+
+// Create task
+app.post('/v1/tasks', requireAuth, async (req, res) => {
   try {
     const parsed = TaskCreate.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const t = parsed.data;
+    
+    // Requester must match authenticated wallet
+    if (t.requester.type === 'wallet' && t.requester.id.toLowerCase() !== req.wallet) {
+      return res.status(403).json({ error: 'requester_wallet_mismatch', message: 'Requester wallet must match authenticated wallet' });
+    }
+    
     const id = uuid();
     const createdAt = nowIso();
-    const approver = t.approver ?? { type: 'requester', id: t.requester.id };
-
-    // Calculate amounts
+    const approver = t.approver ?? { type: 'wallet', id: req.wallet };
     const { fee, required } = calculateAmounts(t.payout.amount);
 
-    // Get deposit address
     let depositIndex = null;
     let depositAddress = null;
     if (hdWallet) {
@@ -266,34 +503,29 @@ app.post('/v1/tasks', async (req, res) => {
       depositAddress = deriveDepositAddress(depositIndex);
     }
 
-    // Ensure requester wallet is tracked
-    if (t.requester.type === 'wallet') {
-      await ensureWallet(t.requester.id);
-      await updateWalletRep(t.requester.id, 'tasks_created');
-    }
+    await ensureWallet(req.wallet);
+    await updateWalletRep(req.wallet, 'tasks_created');
 
-    // Start as 'draft' (needs funding) or 'open' if no HD wallet configured
     const initialStatus = hdWallet ? 'draft' : 'open';
 
     await pool.query(
-      `INSERT INTO tasks (id, status, title, instructions, tags, payout_amount, payout_currency, fee_amount, required_amount, requester_type, requester_id, approver_type, approver_id, deposit_index, deposit_address, deadline_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+      `INSERT INTO tasks (id, status, title, instructions, tags, payout_amount, payout_currency, fee_amount, required_amount, verification_type, requester_type, requester_id, approver_type, approver_id, deposit_index, deposit_address, deadline_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
       [id, initialStatus, t.title, t.instructions, JSON.stringify(t.tags), t.payout.amount, t.payout.currency,
-       fee, required, t.requester.type, t.requester.id, approver.type, approver.id, 
+       fee, required, t.verificationType, t.requester.type, req.wallet, approver.type, approver.id.toLowerCase(), 
        depositIndex, depositAddress, t.deadlineAt ?? null, createdAt, createdAt]
     );
 
-    await addEvent({ taskId: id, type: 'task.created', actor: t.requester, data: { title: t.title } });
+    await addEvent({ taskId: id, type: 'task.created', actor: { type: 'wallet', id: req.wallet }, data: { title: t.title } });
 
-    const task = await getTask(id);
-    res.status(201).json({ task });
+    res.status(201).json({ task: await getTask(id) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'internal_error' });
   }
 });
 
-// List tasks
+// List tasks (public)
 app.get('/v1/tasks', async (req, res) => {
   try {
     const status = req.query.status;
@@ -308,7 +540,7 @@ app.get('/v1/tasks', async (req, res) => {
   }
 });
 
-// Get task
+// Get task (public)
 app.get('/v1/tasks/:id', async (req, res) => {
   try {
     const task = await getTask(req.params.id);
@@ -320,7 +552,7 @@ app.get('/v1/tasks/:id', async (req, res) => {
   }
 });
 
-// Check/refresh funding status
+// Check funding (public)
 app.post('/v1/tasks/:id/check-funding', async (req, res) => {
   try {
     const taskId = req.params.id;
@@ -333,18 +565,12 @@ app.post('/v1/tasks/:id/check-funding', async (req, res) => {
       return res.status(400).json({ error: 'no_deposit_address' });
     }
 
-    // Check USDC transfers to deposit address on Base
     const usdc = new ethers.Contract(USDC_ADDRESS, USDC_ABI, provider);
     const filter = usdc.filters.Transfer(null, taskRow.deposit_address);
-    
-    // Look back ~1000 blocks (~30 min on Base)
     const currentBlock = await provider.getBlockNumber();
     const fromBlock = Math.max(0, currentBlock - 1000);
-    
     const events = await usdc.queryFilter(filter, fromBlock, currentBlock);
-    
-    // Find a transfer with enough value
-    const requiredWei = ethers.parseUnits(taskRow.required_amount, 6); // USDC has 6 decimals
+    const requiredWei = ethers.parseUnits(taskRow.required_amount, 6);
     
     for (const event of events) {
       if (event.args.value >= requiredWei) {
@@ -352,7 +578,6 @@ app.post('/v1/tasks/:id/check-funding', async (req, res) => {
         const confirmations = currentBlock - receipt.blockNumber;
         
         if (confirmations >= FUNDING_CONFIRMATIONS) {
-          // Mark as funded!
           const ts = nowIso();
           const fundedAmount = ethers.formatUnits(event.args.value, 6);
           
@@ -372,8 +597,7 @@ app.post('/v1/tasks/:id/check-funding', async (req, res) => {
             data: { txHash: event.transactionHash, amount: fundedAmount }
           });
           
-          const task = await getTask(taskId);
-          return res.json({ task, funded: true, txHash: event.transactionHash });
+          return res.json({ task: await getTask(taskId), funded: true, txHash: event.transactionHash });
         }
       }
     }
@@ -385,7 +609,7 @@ app.post('/v1/tasks/:id/check-funding', async (req, res) => {
   }
 });
 
-// Admin: manually mark as funded (for testing)
+// Admin fund (testing)
 app.post('/v1/tasks/:id/fund', adminAuth, async (req, res) => {
   try {
     const taskId = req.params.id;
@@ -398,23 +622,17 @@ app.post('/v1/tasks/:id/fund', adminAuth, async (req, res) => {
       [ts, taskRow.required_amount, ts, taskId]
     );
     
-    await addEvent({ 
-      taskId, 
-      type: 'task.funded', 
-      actor: { type: 'admin', id: 'manual' },
-      data: { manual: true }
-    });
+    await addEvent({ taskId, type: 'task.funded', actor: { type: 'admin', id: 'manual' }, data: { manual: true } });
     
-    const task = await getTask(taskId);
-    res.json({ task, funded: true });
+    res.json({ task: await getTask(taskId), funded: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'internal_error' });
   }
 });
 
-// Claim task (requires wallet, task must be open/funded)
-app.post('/v1/tasks/:id/claim', async (req, res) => {
+// Claim task (requires auth + reputation check)
+app.post('/v1/tasks/:id/claim', requireAuth, async (req, res) => {
   try {
     const taskId = req.params.id;
     const taskRow = await getTaskRaw(taskId);
@@ -426,12 +644,32 @@ app.post('/v1/tasks/:id/claim', async (req, res) => {
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     
     const { wallet, agent } = parsed.data;
+    
+    // Wallet must match authenticated wallet
+    if (wallet.toLowerCase() !== req.wallet) {
+      return res.status(403).json({ error: 'wallet_mismatch', message: 'Claim wallet must match authenticated wallet' });
+    }
+    
     const agentInfo = agent ?? { type: 'wallet', id: wallet };
 
-    // Ensure wallet is tracked
+    // Reputation check for high-value tasks
+    const payoutAmount = parseFloat(taskRow.payout_amount);
+    if (payoutAmount > HIGH_VALUE_THRESHOLD) {
+      const walletRep = await getWalletRep(wallet);
+      const score = walletRep?.score || 0;
+      if (score < MIN_REP_HIGH_VALUE) {
+        return res.status(403).json({ 
+          error: 'insufficient_reputation',
+          message: `Tasks over ${HIGH_VALUE_THRESHOLD} USDC require reputation score of ${MIN_REP_HIGH_VALUE}+. Your score: ${score}`,
+          requiredScore: MIN_REP_HIGH_VALUE,
+          yourScore: score,
+        });
+      }
+    }
+
     await ensureWallet(wallet);
 
-    // MVP: one active claim per task
+    // Check for existing claims
     const existing = await pool.query(
       "SELECT * FROM claims WHERE task_id = $1 AND status IN ('claimed','submitted')",
       [taskId]
@@ -457,13 +695,19 @@ app.post('/v1/tasks/:id/claim', async (req, res) => {
   }
 });
 
-// Submit proof
-app.post('/v1/claims/:id/submit', async (req, res) => {
+// Submit proof (requires auth, must be claimer)
+app.post('/v1/claims/:id/submit', requireAuth, async (req, res) => {
   try {
     const claimId = req.params.id;
     const claimRow = await pool.query('SELECT * FROM claims WHERE id = $1', [claimId]);
     if (claimRow.rows.length === 0) return res.status(404).json({ error: 'not_found' });
     const claim = claimRow.rows[0];
+    
+    // Must be the claimer
+    if (claim.wallet_address !== req.wallet) {
+      return res.status(403).json({ error: 'not_claimer', message: 'Only the claimer can submit proof' });
+    }
+    
     if (claim.status !== 'claimed') return res.status(409).json({ error: 'claim_not_claimed' });
 
     const parsed = Submit.safeParse(req.body);
@@ -478,6 +722,35 @@ app.post('/v1/claims/:id/submit', async (req, res) => {
     await pool.query('UPDATE tasks SET status = $1, updated_at = $2 WHERE id = $3', ['submitted', ts, claim.task_id]);
     await addEvent({ taskId: claim.task_id, claimId, type: 'claim.submitted', actor: { type: claim.agent_type, id: claim.agent_id } });
 
+    // If AI judge, run verification
+    const taskRow = await getTaskRaw(claim.task_id);
+    if (taskRow.verification_type === 'ai_judge') {
+      const updatedClaim = await pool.query('SELECT * FROM claims WHERE id = $1', [claimId]);
+      const aiResult = await aiJudgeVerify(taskRow, updatedClaim.rows[0]);
+      
+      await pool.query(
+        `UPDATE claims SET ai_verification_result = $1, updated_at = $2 WHERE id = $3`,
+        [JSON.stringify(aiResult), nowIso(), claimId]
+      );
+      
+      await addEvent({ 
+        taskId: claim.task_id, 
+        claimId, 
+        type: 'claim.ai_verified', 
+        actor: { type: 'system', id: 'ai-judge' },
+        data: aiResult
+      });
+      
+      // Auto-approve if AI confident enough
+      if (aiResult.approved && aiResult.confidence >= 0.8) {
+        await pool.query(`UPDATE claims SET status='approved', approved_at=$1, updated_at=$2 WHERE id=$3`, [nowIso(), nowIso(), claimId]);
+        await pool.query('UPDATE tasks SET status = $1, updated_at = $2 WHERE id = $3', ['approved', nowIso(), claim.task_id]);
+        await updateWalletRep(claim.wallet_address, 'claims_approved');
+        await updateWalletRep(claim.wallet_address, 'score', 1);
+        await addEvent({ taskId: claim.task_id, claimId, type: 'claim.approved', actor: { type: 'system', id: 'ai-judge' } });
+      }
+    }
+
     res.json({ claim: await getClaim(claimId), task: await getTask(claim.task_id) });
   } catch (err) {
     console.error(err);
@@ -485,13 +758,21 @@ app.post('/v1/claims/:id/submit', async (req, res) => {
   }
 });
 
-// Approve claim
-app.post('/v1/claims/:id/approve', async (req, res) => {
+// Approve claim (requires auth, must be requester/approver)
+app.post('/v1/claims/:id/approve', requireAuth, async (req, res) => {
   try {
     const claimId = req.params.id;
     const claimRow = await pool.query('SELECT * FROM claims WHERE id = $1', [claimId]);
     if (claimRow.rows.length === 0) return res.status(404).json({ error: 'not_found' });
     const claim = claimRow.rows[0];
+    
+    const taskRow = await getTaskRaw(claim.task_id);
+    
+    // Must be the approver (requester or designated approver)
+    if (taskRow.approver_id !== req.wallet && taskRow.requester_id !== req.wallet) {
+      return res.status(403).json({ error: 'not_approver', message: 'Only the task requester or designated approver can approve' });
+    }
+    
     if (claim.status !== 'submitted') return res.status(409).json({ error: 'claim_not_submitted' });
 
     const ts = nowIso();
@@ -501,7 +782,7 @@ app.post('/v1/claims/:id/approve', async (req, res) => {
     await updateWalletRep(claim.wallet_address, 'claims_approved');
     await updateWalletRep(claim.wallet_address, 'score', 1);
     
-    await addEvent({ taskId: claim.task_id, claimId, type: 'claim.approved', actor: { type: 'approver', id: 'manual' } });
+    await addEvent({ taskId: claim.task_id, claimId, type: 'claim.approved', actor: { type: 'wallet', id: req.wallet } });
 
     res.json({ claim: await getClaim(claimId), task: await getTask(claim.task_id) });
   } catch (err) {
@@ -510,23 +791,33 @@ app.post('/v1/claims/:id/approve', async (req, res) => {
   }
 });
 
-// Reject claim
-app.post('/v1/claims/:id/reject', async (req, res) => {
+// Reject claim (requires auth, must be requester/approver)
+app.post('/v1/claims/:id/reject', requireAuth, async (req, res) => {
   try {
     const claimId = req.params.id;
     const claimRow = await pool.query('SELECT * FROM claims WHERE id = $1', [claimId]);
     if (claimRow.rows.length === 0) return res.status(404).json({ error: 'not_found' });
     const claim = claimRow.rows[0];
+    
+    const taskRow = await getTaskRaw(claim.task_id);
+    
+    // Must be the approver
+    if (taskRow.approver_id !== req.wallet && taskRow.requester_id !== req.wallet) {
+      return res.status(403).json({ error: 'not_approver', message: 'Only the task requester or designated approver can reject' });
+    }
+    
     if (claim.status !== 'submitted') return res.status(409).json({ error: 'claim_not_submitted' });
 
     const ts = nowIso();
     await pool.query(`UPDATE claims SET status='rejected', updated_at=$1 WHERE id=$2`, [ts, claimId]);
-    await pool.query('UPDATE tasks SET status = $1, updated_at = $2 WHERE id = $3', ['rejected', ts, claim.task_id]);
+    
+    // Re-open the task so others can claim
+    await pool.query('UPDATE tasks SET status = $1, updated_at = $2 WHERE id = $3', ['open', ts, claim.task_id]);
     
     await updateWalletRep(claim.wallet_address, 'claims_rejected');
     await updateWalletRep(claim.wallet_address, 'score', -2);
     
-    await addEvent({ taskId: claim.task_id, claimId, type: 'claim.rejected', actor: { type: 'approver', id: 'manual' } });
+    await addEvent({ taskId: claim.task_id, claimId, type: 'claim.rejected', actor: { type: 'wallet', id: req.wallet } });
 
     res.json({ claim: await getClaim(claimId), task: await getTask(claim.task_id) });
   } catch (err) {
@@ -535,7 +826,7 @@ app.post('/v1/claims/:id/reject', async (req, res) => {
   }
 });
 
-// Get task events
+// Get task events (public)
 app.get('/v1/tasks/:id/events', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM events WHERE task_id = $1 ORDER BY created_at ASC', [req.params.id]);
@@ -556,7 +847,18 @@ app.get('/v1/tasks/:id/events', async (req, res) => {
   }
 });
 
-// Get wallet reputation
+// Get claims for task (public)
+app.get('/v1/tasks/:id/claims', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM claims WHERE task_id = $1 ORDER BY created_at DESC', [req.params.id]);
+    res.json({ claims: result.rows.map(hydrateClaim) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// Get wallet reputation (public)
 app.get('/v1/wallets/:address/reputation', async (req, res) => {
   try {
     const address = req.params.address.toLowerCase();
@@ -572,6 +874,7 @@ app.get('/v1/wallets/:address/reputation', async (req, res) => {
       wallet: address,
       reputation: {
         score: w.score,
+        isTrustedRequester: w.is_trusted_requester,
         stats: {
           tasksCreated: w.tasks_created,
           tasksFunded: w.tasks_funded,
@@ -592,11 +895,11 @@ app.get('/v1/wallets/:address/reputation', async (req, res) => {
   }
 });
 
-// Leaderboard
+// Leaderboard (public)
 app.get('/v1/leaderboard', async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT address, score, claims_approved, total_earned_usdc FROM wallets ORDER BY score DESC LIMIT 50'
+      'SELECT address, score, claims_approved, claims_rejected, total_earned_usdc FROM wallets WHERE score > 0 ORDER BY score DESC LIMIT 50'
     );
     res.json({ leaderboard: result.rows });
   } catch (err) {
@@ -605,17 +908,7 @@ app.get('/v1/leaderboard', async (req, res) => {
   }
 });
 
-// Get claims for a task
-app.get('/v1/tasks/:id/claims', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM claims WHERE task_id = $1 ORDER BY created_at DESC', [req.params.id]);
-    res.json({ claims: result.rows.map(hydrateClaim) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'internal_error' });
-  }
-});
-
+// ============ Hydrators ============
 function hydrateTask(row) {
   return {
     id: row.id,
@@ -626,17 +919,11 @@ function hydrateTask(row) {
     payout: { amount: row.payout_amount, currency: row.payout_currency },
     fee: row.fee_amount,
     requiredAmount: row.required_amount,
+    verificationType: row.verification_type,
     requester: { type: row.requester_type, id: row.requester_id },
     approver: { type: row.approver_type, id: row.approver_id },
-    deposit: row.deposit_address ? {
-      address: row.deposit_address,
-      index: row.deposit_index,
-    } : null,
-    funding: row.funded_at ? {
-      txHash: row.funded_tx_hash,
-      amount: row.funded_amount,
-      at: row.funded_at,
-    } : null,
+    deposit: row.deposit_address ? { address: row.deposit_address, index: row.deposit_index } : null,
+    funding: row.funded_at ? { txHash: row.funded_tx_hash, amount: row.funded_amount, at: row.funded_at } : null,
     deadlineAt: row.deadline_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -656,6 +943,7 @@ function hydrateClaim(c) {
     paidAt: c.paid_at,
     paidTxHash: c.paid_tx_hash,
     submission: c.submission_kind ? { kind: c.submission_kind, payload: c.submission_payload, hash: c.submission_hash } : null,
+    aiVerification: c.ai_verification_result,
     createdAt: c.created_at,
     updatedAt: c.updated_at
   };
@@ -674,15 +962,15 @@ async function getTask(id) {
 async function getClaim(id) {
   const result = await pool.query('SELECT * FROM claims WHERE id = $1', [id]);
   const c = result.rows[0];
-  if (!c) return null;
-  return hydrateClaim(c);
+  return c ? hydrateClaim(c) : null;
 }
 
 // Start server
 initDb().then(() => {
   app.listen(PORT, () => {
     console.log(`[clawed-escrow] listening on :${PORT}`);
-    console.log(`[config] FEE_BPS=${FEE_BPS}, FUNDING_CONFIRMATIONS=${FUNDING_CONFIRMATIONS}`);
+    console.log(`[security] Rate limit: ${RATE_LIMIT_MAX}/min, Signature window: ${SIGNATURE_WINDOW/1000}s`);
+    console.log(`[config] FEE_BPS=${FEE_BPS}, AI_JUDGE=${!!OPENAI_API_KEY}`);
   });
 }).catch(err => {
   console.error('Failed to initialize database:', err);
