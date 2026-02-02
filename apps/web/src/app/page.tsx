@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { getTasks, Task } from '@/lib/api';
+import { Header } from '@/components/Header';
 
 function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status}`}>{status}</span>;
@@ -7,24 +8,23 @@ function StatusBadge({ status }: { status: string }) {
 
 function TaskCard({ task }: { task: Task }) {
   return (
-    <Link href={`/tasks/${task.id}`}>
-      <div className="card">
-        <div className="flex-between mb-1">
-          <h3>{task.title}</h3>
+    <Link href={`/tasks/${task.id}`} className="task-card">
+      <div className="card card-clickable">
+        <div className="task-card-header">
+          <h3 className="task-card-title">{task.title}</h3>
           <StatusBadge status={task.status} />
         </div>
-        <p className="text-muted text-sm mb-1">
-          {task.instructions.slice(0, 150)}
-          {task.instructions.length > 150 ? '...' : ''}
+        <p className="task-card-description">
+          {task.instructions}
         </p>
-        <div className="flex-between">
-          <span className="text-sm">
-            💰 <strong>{task.payout.amount} USDC</strong>
+        <div className="task-card-footer">
+          <div className="task-payout">
+            💰 {task.payout.amount} USDC
             {task.status === 'draft' && (
-              <span className="text-muted"> (awaiting funding)</span>
+              <span className="text-muted text-sm">(awaiting funding)</span>
             )}
-          </span>
-          <span className="text-muted text-sm">
+          </div>
+          <span className="task-meta">
             {new Date(task.createdAt).toLocaleDateString()}
           </span>
         </div>
@@ -35,25 +35,66 @@ function TaskCard({ task }: { task: Task }) {
 
 export default async function Home() {
   const tasks = await getTasks();
+  
+  const openTasks = tasks.filter(t => t.status === 'open');
+  const activeTasks = tasks.filter(t => ['claimed', 'submitted'].includes(t.status));
+  const draftTasks = tasks.filter(t => t.status === 'draft');
 
   return (
     <>
-      <nav>
-        <div className="flex-between">
-          <span className="logo">🔒 Clawed Escrow</span>
-          <Link href="/tasks/new" className="btn btn-primary">
-            + Create Task
-          </Link>
-        </div>
-      </nav>
+      <Header />
       <div className="container">
-        <h1>Tasks</h1>
-        {tasks.length === 0 ? (
+        <div className="page-header">
+          <h1>Task Board</h1>
+          <p>Browse available tasks, claim work, and earn USDC on Base.</p>
+        </div>
+
+        {/* Stats */}
+        <div className="stats-grid mb-3">
+          <div className="stat-item">
+            <div className="stat-value">{openTasks.length}</div>
+            <div className="stat-label">Open Tasks</div>
+          </div>
+          <div className="stat-item">
+            <div className="stat-value">{activeTasks.length}</div>
+            <div className="stat-label">In Progress</div>
+          </div>
+          <div className="stat-item">
+            <div className="stat-value">
+              {tasks.reduce((sum, t) => sum + parseFloat(t.payout.amount), 0).toFixed(2)}
+            </div>
+            <div className="stat-label">USDC in Escrow</div>
+          </div>
+        </div>
+
+        {/* Open Tasks */}
+        <h2>🟢 Open Tasks</h2>
+        {openTasks.length === 0 ? (
           <div className="card">
-            <p className="text-muted">No tasks yet. Create one to get started!</p>
+            <div className="empty-state">
+              <div className="empty-state-icon">📭</div>
+              <div className="empty-state-title">No open tasks</div>
+              <p>Create a new task or wait for tasks to be funded.</p>
+            </div>
           </div>
         ) : (
-          tasks.map((task) => <TaskCard key={task.id} task={task} />)
+          openTasks.map((task) => <TaskCard key={task.id} task={task} />)
+        )}
+
+        {/* Active Tasks */}
+        {activeTasks.length > 0 && (
+          <>
+            <h2 className="mt-3">🔄 In Progress</h2>
+            {activeTasks.map((task) => <TaskCard key={task.id} task={task} />)}
+          </>
+        )}
+
+        {/* Draft Tasks */}
+        {draftTasks.length > 0 && (
+          <>
+            <h2 className="mt-3">⏳ Awaiting Funding</h2>
+            {draftTasks.map((task) => <TaskCard key={task.id} task={task} />)}
+          </>
         )}
       </div>
     </>

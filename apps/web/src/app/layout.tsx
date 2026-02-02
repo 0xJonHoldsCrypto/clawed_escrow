@@ -1,9 +1,10 @@
 import type { Metadata } from 'next';
+import { Providers } from '@/components/Providers';
 import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Clawed Escrow',
-  description: 'Agent task escrow + proof-of-work router',
+  description: 'Agent task escrow + proof-of-work router — Clawed Claims Protocol',
 };
 
 export default function RootLayout({
@@ -13,7 +14,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

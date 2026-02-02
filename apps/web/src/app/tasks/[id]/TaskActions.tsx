@@ -2,32 +2,30 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAccount } from 'wagmi';
+import { ConnectButton } from '@rainbow-me/rainbowkit';
 
-const API_URL = process.env.API_URL || 'https://clawedescrow-production.up.railway.app';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://clawedescrow-production.up.railway.app';
 
 export default function TaskActions({ taskId, status }: { taskId: string; status: string }) {
   const router = useRouter();
+  const { address, isConnected } = useAccount();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [claimId, setClaimId] = useState('');
 
-  async function handleClaim(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  async function handleClaim() {
+    if (!address) return;
     setLoading(true);
     setError('');
-
-    const form = e.currentTarget;
-    const formData = new FormData(form);
 
     try {
       const res = await fetch(`${API_URL}/v1/tasks/${taskId}/claim`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          agent: {
-            type: 'wallet',
-            id: formData.get('wallet') as string,
-          },
+          wallet: address,
+          agent: { type: 'wallet', id: address },
         }),
       });
 
@@ -125,64 +123,98 @@ export default function TaskActions({ taskId, status }: { taskId: string; status
     }
   }
 
+  if (status === 'draft') {
+    return (
+      <div className="card mt-2">
+        <h2>⏳ Awaiting Funding</h2>
+        <p className="text-secondary">
+          This task needs to be funded before it can be claimed. Send USDC to the deposit address above.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="card mt-2">
       <h2>Actions</h2>
 
       {error && (
-        <p style={{ color: 'var(--error)' }} className="mb-1">{error}</p>
+        <div className="card card-error mb-2">
+          <p className="text-error">{error}</p>
+        </div>
       )}
 
       {status === 'open' && (
-        <form onSubmit={handleClaim}>
-          <p className="text-muted mb-1">Claim this task to start working on it.</p>
-          <input
-            type="text"
-            name="wallet"
-            placeholder="Your wallet address (0x...)"
-            required
-            pattern="^0x[a-fA-F0-9]{40}$"
-          />
-          <button type="submit" className="btn btn-primary" disabled={loading}>
-            {loading ? 'Claiming...' : 'Claim Task'}
-          </button>
-        </form>
+        <>
+          {!isConnected ? (
+            <div className="text-center">
+              <p className="text-secondary mb-2">Connect your wallet to claim this task.</p>
+              <ConnectButton />
+            </div>
+          ) : (
+            <div>
+              <p className="text-secondary mb-2">
+                Claim this task to start working on it. You'll need to submit proof when complete.
+              </p>
+              <button onClick={handleClaim} className="btn btn-primary" disabled={loading}>
+                {loading ? 'Claiming...' : '🎯 Claim Task'}
+              </button>
+              <p className="text-muted text-sm mt-2">
+                Your wallet: {address?.slice(0, 6)}...{address?.slice(-4)}
+              </p>
+            </div>
+          )}
+        </>
       )}
 
       {status === 'claimed' && (
         <form onSubmit={handleSubmit}>
-          <p className="text-muted mb-1">Submit proof that you completed the task.</p>
-          <input
-            type="text"
-            name="claimId"
-            placeholder="Claim ID"
-            required
-            defaultValue={claimId}
-          />
-          <textarea
-            name="proof"
-            placeholder="Proof URL or description..."
-            required
-            rows={3}
-          />
+          <p className="text-secondary mb-2">Submit proof that you completed the task.</p>
+          <div className="form-group">
+            <label htmlFor="claimId">Claim ID</label>
+            <input
+              type="text"
+              id="claimId"
+              name="claimId"
+              placeholder="Paste your claim ID"
+              required
+              defaultValue={claimId}
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="proof">Proof URL or Description</label>
+            <textarea
+              id="proof"
+              name="proof"
+              placeholder="Link to your completed work, screenshot URL, or description..."
+              required
+              rows={3}
+            />
+          </div>
           <button type="submit" className="btn btn-primary" disabled={loading}>
-            {loading ? 'Submitting...' : 'Submit Proof'}
+            {loading ? 'Submitting...' : '📤 Submit Proof'}
           </button>
         </form>
       )}
 
       {status === 'submitted' && (
         <form onSubmit={handleApprove}>
-          <p className="text-muted mb-1">Review the submission and approve or reject.</p>
-          <input
-            type="text"
-            name="claimId"
-            placeholder="Claim ID"
-            required
-          />
+          <p className="text-secondary mb-2">
+            Review the submission and approve or reject. Only the task requester can do this.
+          </p>
+          <div className="form-group">
+            <label htmlFor="claimId">Claim ID</label>
+            <input
+              type="text"
+              id="claimId"
+              name="claimId"
+              placeholder="Paste the claim ID to review"
+              required
+            />
+          </div>
           <div className="flex gap-2">
             <button type="submit" className="btn btn-success" disabled={loading}>
-              {loading ? 'Processing...' : '✓ Approve'}
+              {loading ? 'Processing...' : '✓ Approve & Pay'}
             </button>
             <button
               type="button"
@@ -201,15 +233,27 @@ export default function TaskActions({ taskId, status }: { taskId: string; status
       )}
 
       {status === 'approved' && (
-        <p className="text-muted">This task has been approved. Payout pending.</p>
+        <div className="text-center">
+          <div className="empty-state-icon">✅</div>
+          <p className="text-success font-bold">Task Approved!</p>
+          <p className="text-secondary">Payout is pending processing.</p>
+        </div>
       )}
 
       {status === 'paid' && (
-        <p style={{ color: 'var(--success)' }}>✓ This task has been completed and paid.</p>
+        <div className="text-center">
+          <div className="empty-state-icon">💰</div>
+          <p className="text-success font-bold">Task Completed & Paid!</p>
+          <p className="text-secondary">The agent has received their USDC payout.</p>
+        </div>
       )}
 
       {status === 'rejected' && (
-        <p style={{ color: 'var(--error)' }}>This submission was rejected.</p>
+        <div className="text-center">
+          <div className="empty-state-icon">❌</div>
+          <p className="text-error font-bold">Submission Rejected</p>
+          <p className="text-secondary">The proof was not accepted.</p>
+        </div>
       )}
     </div>
   );
