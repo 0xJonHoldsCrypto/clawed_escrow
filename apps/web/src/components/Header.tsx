@@ -14,6 +14,7 @@ export function Header() {
         <nav className="nav-links">
           <Link href="/" className="nav-link">Tasks</Link>
           <Link href="/leaderboard" className="nav-link">Leaderboard</Link>
+          <Link href="/docs/agents" className="nav-link">For Agents</Link>
           <Link href="/docs" className="nav-link">Docs</Link>
         </nav>
         <div className="header-actions">
