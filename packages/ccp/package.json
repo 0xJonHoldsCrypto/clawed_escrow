@@ -1,0 +1,16 @@
+{
+  "name": "@clawed/ccp",
+  "version": "0.0.1",
+  "description": "Clawed Claims Protocol — shared types and schemas",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "build": "echo 'no build step for JS'"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  }
+}

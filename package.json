@@ -1,0 +1,20 @@
+{
+  "name": "clawed-escrow",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Clawed Escrow — Agent task escrow + proof-of-work router (Clawed Claims Protocol)",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "build": "npm run build -w packages/ccp && npm run build -w apps/api && npm run build -w apps/web",
+    "lint": "eslint ."
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
