@@ -7,8 +7,12 @@ export interface Task {
   instructions: string;
   tags: string[];
   payout: { amount: string; currency: string };
+  fee: string | null;
+  requiredAmount: string | null;
   requester: { type: string; id: string };
   approver: { type: string; id: string };
+  deposit: { address: string; index: number } | null;
+  funding: { txHash: string | null; amount: string; at: string } | null;
   deadlineAt: string | null;
   createdAt: string;
   updatedAt: string;

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { getTask, getTaskEvents } from '@/lib/api';
 import { notFound } from 'next/navigation';
 import TaskActions from './TaskActions';
+import FundingStatus from './FundingStatus';
 
 function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status}`}>{status}</span>;
@@ -42,6 +43,9 @@ export default async function TaskPage({ params }: { params: { id: string } }) {
             <div>
               <p className="text-sm text-muted">Payout</p>
               <p><strong>{task.payout.amount} USDC</strong></p>
+              {task.fee && (
+                <p className="text-sm text-muted">+ {task.fee} fee</p>
+              )}
             </div>
             <div>
               <p className="text-sm text-muted">Requester</p>
@@ -53,6 +57,34 @@ export default async function TaskPage({ params }: { params: { id: string } }) {
             </div>
           </div>
         </div>
+
+        {/* Funding section for draft tasks */}
+        {task.status === 'draft' && task.deposit && (
+          <FundingStatus 
+            taskId={task.id}
+            depositAddress={task.deposit.address}
+            requiredAmount={task.requiredAmount || '0'}
+            payout={task.payout.amount}
+            fee={task.fee || '0'}
+          />
+        )}
+
+        {/* Show funding info if funded */}
+        {task.funding && (
+          <div className="card mt-2" style={{ borderColor: 'var(--success)' }}>
+            <h2>✓ Funded</h2>
+            <p className="text-sm">
+              <strong>{task.funding.amount} USDC</strong> received
+              {task.funding.txHash && (
+                <>
+                  {' '}— <a href={`https://basescan.org/tx/${task.funding.txHash}`} target="_blank" rel="noopener" className="mono">
+                    {task.funding.txHash.slice(0, 10)}...
+                  </a>
+                </>
+              )}
+            </p>
+          </div>
+        )}
 
         <TaskActions taskId={task.id} status={task.status} />
 

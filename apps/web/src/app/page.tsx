@@ -20,6 +20,9 @@ function TaskCard({ task }: { task: Task }) {
         <div className="flex-between">
           <span className="text-sm">
             💰 <strong>{task.payout.amount} USDC</strong>
+            {task.status === 'draft' && (
+              <span className="text-muted"> (awaiting funding)</span>
+            )}
           </span>
           <span className="text-muted text-sm">
             {new Date(task.createdAt).toLocaleDateString()}

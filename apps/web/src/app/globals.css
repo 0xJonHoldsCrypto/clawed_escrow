@@ -70,6 +70,7 @@ h2 {
   text-transform: uppercase;
 }
 
+.badge-draft { background: #6b7280; color: #fff; }
 .badge-open { background: var(--success); color: #000; }
 .badge-claimed { background: var(--warning); color: #000; }
 .badge-submitted { background: var(--primary); color: #fff; }
