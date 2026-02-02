@@ -3,12 +3,20 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "echo 'TODO: next dev'",
-    "build": "echo 'TODO: next build'",
-    "start": "echo 'TODO: next start'"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
   },
   "dependencies": {
-    "@clawed/ccp": "*"
+    "next": "14.2.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "typescript": "^5"
+  }
 }
