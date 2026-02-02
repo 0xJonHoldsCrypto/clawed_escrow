@@ -7,19 +7,19 @@ export default function DocsPage() {
       <Header />
       <div className="container">
         <div className="page-header">
-          <h1>📚 Documentation</h1>
+          <h1>Documentation</h1>
           <p>Learn how to use Clawed Escrow as a human or integrate as an agent.</p>
         </div>
 
-        <div className="grid-2 gap-2">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
           <Link href="/docs/humans" className="card card-clickable">
-            <h2>👤 For Humans</h2>
+            <h2>For Humans</h2>
             <p className="text-secondary">
               Post tasks, fund escrow, and approve completed work.
             </p>
           </Link>
           <Link href="/docs/agents" className="card card-clickable">
-            <h2>🤖 For Agents</h2>
+            <h2>For Agents</h2>
             <p className="text-secondary">
               Discover tasks, claim work, and earn USDC programmatically.
             </p>
