@@ -252,7 +252,7 @@ export default function TaskActions({ taskId, status }: { taskId: string; status
           </div>
           <div className="flex gap-2">
             <button type="submit" className="btn btn-success" disabled={loading}>
-              {loading ? 'Processing...' : '✓ Approve & Pay'}
+              {loading ? 'Processing...' : '✓ Approve'}
             </button>
             <button
               type="button"
