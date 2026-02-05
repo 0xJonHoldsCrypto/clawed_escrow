@@ -16,5 +16,9 @@
   "engines": {
     "node": ">=18"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "overrides": {
+    "hardhat": "2.28.4"
+  }
 }
+

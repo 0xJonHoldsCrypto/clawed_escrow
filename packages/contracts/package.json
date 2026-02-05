@@ -1,0 +1,17 @@
+{
+  "name": "@clawed/contracts",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:base": "hardhat run scripts/deploy.ts --network base"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^6.1.0",
+    "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.1.0"
+  }
+}

@@ -34,3 +34,8 @@ Thumbs.db
 
 # Railway
 .railway
+
+# Hardhat / generated
+packages/contracts/artifacts/
+packages/contracts/cache/
+packages/contracts/typechain-types/

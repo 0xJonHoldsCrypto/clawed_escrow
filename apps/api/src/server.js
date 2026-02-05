@@ -4,6 +4,10 @@ import pg from 'pg';
 import { ethers } from 'ethers';
 import crypto from 'crypto';
 
+// Onchain (v2)
+import { ESCROW_CONTRACT_ADDRESS, escrow as escrowContract, provider as baseProvider } from './contract.js';
+import { indexOnce, ensureCursorRow, getCursor } from './indexer.js';
+
 const { Pool } = pg;
 
 const PORT = process.env.PORT || 8787;
@@ -26,6 +30,10 @@ if (!DATABASE_URL) {
 const pool = new Pool({ connectionString: DATABASE_URL });
 const provider = new ethers.JsonRpcProvider(BASE_RPC_URL);
 const USDC_ABI = ['event Transfer(address indexed from, address indexed to, uint256 value)'];
+
+// v2 indexer settings
+const INDEXER_CONFIRMATIONS = parseInt(process.env.INDEXER_CONFIRMATIONS || '15');
+const INDEXER_BATCH_BLOCKS = parseInt(process.env.INDEXER_BATCH_BLOCKS || '1500');
 
 let hdWallet = null;
 if (HD_MNEMONIC) {
@@ -256,8 +264,60 @@ async function initDb() {
     );
 
     INSERT INTO deposit_counter (id, next_index) VALUES (1, 0) ON CONFLICT (id) DO NOTHING;
-    
-    -- Add verification_type column if missing
+
+    -- ===== v2 onchain projection tables =====
+    CREATE TABLE IF NOT EXISTS escrow_events (
+      chain_id INTEGER NOT NULL,
+      contract_address TEXT NOT NULL,
+      tx_hash TEXT NOT NULL,
+      log_index INTEGER NOT NULL,
+      block_number INTEGER NOT NULL,
+      block_hash TEXT NOT NULL,
+      event_name TEXT NOT NULL,
+      task_id TEXT,
+      args JSONB NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (chain_id, contract_address, tx_hash, log_index)
+    );
+
+    CREATE TABLE IF NOT EXISTS escrow_tasks (
+      chain_id INTEGER NOT NULL,
+      contract_address TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      requester TEXT,
+      deadline BIGINT,
+      review_window BIGINT,
+      escalation_window BIGINT,
+      max_winners INTEGER,
+      approved_count INTEGER,
+      withdrawn_count INTEGER,
+      pending_submissions INTEGER,
+      payout_amount TEXT,
+      deposit_fee_amount TEXT,
+      recipient_fee_amount TEXT,
+      status INTEGER,
+      spec_hash TEXT,
+      balance TEXT,
+      submission_count INTEGER,
+      claim_count INTEGER,
+      created_block INTEGER,
+      created_tx TEXT,
+      updated_block INTEGER,
+      updated_tx TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (chain_id, contract_address, task_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS escrow_indexer_cursor (
+      chain_id INTEGER NOT NULL,
+      contract_address TEXT NOT NULL,
+      last_processed_block INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (chain_id, contract_address)
+    );
+
+    -- cursor row is initialized in JS (after initDb) once env is available
+
     DO $$ 
     BEGIN 
       IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='tasks' AND column_name='verification_type') THEN
@@ -282,6 +342,26 @@ async function initDb() {
     END $$;
   `);
   console.log('[db] tables initialized');
+  await ensureCursorRow(pool);
+}
+
+// ============ v2 indexer loop (best-effort) ============
+let indexerState = { last: null, error: null };
+async function startIndexer() {
+  // Run once immediately, then every ~10s.
+  try {
+    await indexOnce({ pool, confirmations: INDEXER_CONFIRMATIONS, batchBlocks: INDEXER_BATCH_BLOCKS });
+  } catch (e) {
+    indexerState.error = String(e?.message || e);
+  }
+  setInterval(async () => {
+    try {
+      indexerState.last = await indexOnce({ pool, confirmations: INDEXER_CONFIRMATIONS, batchBlocks: INDEXER_BATCH_BLOCKS });
+      indexerState.error = null;
+    } catch (e) {
+      indexerState.error = String(e?.message || e);
+    }
+  }, 10_000);
 }
 
 const app = express();
@@ -454,15 +534,87 @@ const Submit = z.object({
 
 // ============ Routes ============
 
-app.get('/health', (req, res) => res.json({ 
-  ok: true, 
-  now: nowIso(),
-  hdWallet: !!hdWallet,
-  aiJudge: !!OPENAI_API_KEY,
-  feeBps: FEE_BPS,
-  minRepHighValue: MIN_REP_HIGH_VALUE,
-  highValueThreshold: HIGH_VALUE_THRESHOLD,
-}));
+// ===== v2 (onchain) =====
+app.get('/v2/escrow', async (req, res) => {
+  try {
+    const [usdc, treasury, arbiter] = await Promise.all([
+      escrowContract.usdc(),
+      escrowContract.treasury(),
+      escrowContract.arbiter(),
+    ]);
+
+    res.json({
+      chainId: 8453,
+      contractAddress: ESCROW_CONTRACT_ADDRESS,
+      usdc,
+      treasury,
+      arbiter,
+      creatorFeeBps: 200,
+      recipientFeeBps: 200,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+app.get('/v2/indexer/status', async (req, res) => {
+  try {
+    const head = await baseProvider.getBlockNumber();
+    const cursor = await getCursor(pool);
+    res.json({ chainId: 8453, contractAddress: ESCROW_CONTRACT_ADDRESS, head, cursor, last: indexerState.last, error: indexerState.error });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+app.get('/v2/tasks', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT * FROM escrow_tasks WHERE chain_id=8453 AND contract_address=$1 ORDER BY COALESCE(updated_block, created_block) DESC NULLS LAST LIMIT 200`,
+      [ESCROW_CONTRACT_ADDRESS.toLowerCase()]
+    );
+    res.json({ tasks: r.rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+app.get('/v2/tasks/:id/events', async (req, res) => {
+  try {
+    const taskId = req.params.id;
+    const r = await pool.query(
+      `SELECT * FROM escrow_events WHERE chain_id=8453 AND contract_address=$1 AND task_id=$2 ORDER BY block_number ASC, log_index ASC LIMIT 500`,
+      [ESCROW_CONTRACT_ADDRESS.toLowerCase(), taskId]
+    );
+    res.json({ events: r.rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+
+app.get('/health', async (req, res) => {
+  const head = await baseProvider.getBlockNumber().catch(() => null);
+  const cursor = await getCursor(pool).catch(() => null);
+  res.json({
+    ok: true,
+    now: nowIso(),
+    hdWallet: !!hdWallet,
+    aiJudge: !!OPENAI_API_KEY,
+    feeBps: FEE_BPS,
+    minRepHighValue: MIN_REP_HIGH_VALUE,
+    highValueThreshold: HIGH_VALUE_THRESHOLD,
+    v2: {
+      chainId: 8453,
+      escrowContract: ESCROW_CONTRACT_ADDRESS,
+      indexer: { head, cursor, last: indexerState.last, error: indexerState.error },
+    },
+  });
+});
 
 // Auth info endpoint
 app.get('/v1/auth/info', (req, res) => {
@@ -966,11 +1118,13 @@ async function getClaim(id) {
 }
 
 // Start server
-initDb().then(() => {
+initDb().then(async () => {
+  await startIndexer();
   app.listen(PORT, () => {
     console.log(`[clawed-escrow] listening on :${PORT}`);
     console.log(`[security] Rate limit: ${RATE_LIMIT_MAX}/min, Signature window: ${SIGNATURE_WINDOW/1000}s`);
     console.log(`[config] FEE_BPS=${FEE_BPS}, AI_JUDGE=${!!OPENAI_API_KEY}`);
+    console.log(`[v2] escrowContract=${ESCROW_CONTRACT_ADDRESS}`);
   });
 }).catch(err => {
   console.error('Failed to initialize database:', err);
