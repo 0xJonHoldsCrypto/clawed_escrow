@@ -89,7 +89,7 @@ export async function indexOnce({ pool, confirmations = 15, batchBlocks = 1500 }
     // Build named args robustly.
     // ethers Result often has non-enumerable named keys; rely on the event fragment inputs instead.
     const args = {};
-    const inputs = parsed.eventFragment?.inputs || [];
+    const inputs = parsed.fragment?.inputs || [];
     for (let i = 0; i < inputs.length; i++) {
       const name = inputs[i]?.name || String(i);
       const v = parsed.args?.[i];
