@@ -596,6 +596,28 @@ app.get('/v2/tasks/:id/events', async (req, res) => {
   }
 });
 
+// Debug: quick counts for v2 tables (safe: no secrets)
+app.get('/v2/debug/counts', async (req, res) => {
+  try {
+    const [ev, tasks, cur] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS n FROM escrow_events WHERE chain_id=8453 AND contract_address=$1`, [ESCROW_CONTRACT_ADDRESS.toLowerCase()]),
+      pool.query(`SELECT COUNT(*)::int AS n FROM escrow_tasks WHERE chain_id=8453 AND contract_address=$1`, [ESCROW_CONTRACT_ADDRESS.toLowerCase()]),
+      pool.query(`SELECT last_processed_block FROM escrow_indexer_cursor WHERE chain_id=8453 AND contract_address=$1`, [ESCROW_CONTRACT_ADDRESS.toLowerCase()]),
+    ]);
+
+    res.json({
+      chainId: 8453,
+      contractAddress: ESCROW_CONTRACT_ADDRESS.toLowerCase(),
+      escrowEvents: ev.rows[0]?.n ?? 0,
+      escrowTasks: tasks.rows[0]?.n ?? 0,
+      cursor: cur.rows[0]?.last_processed_block ?? null,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
 
 app.get('/health', async (req, res) => {
   const head = await baseProvider.getBlockNumber().catch(() => null);
