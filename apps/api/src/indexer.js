@@ -32,7 +32,16 @@ export async function indexOnce({ pool, confirmations = 15, batchBlocks = 1500 }
   const target = Math.max(0, head - confirmations);
 
   await ensureCursorRow(pool);
-  const last = await getCursor(pool);
+  let last = await getCursor(pool);
+
+  // Bootstrap: if cursor is 0 (fresh DB), jump close to chain head so we can index recent events quickly.
+  // This avoids spending days scanning from genesis.
+  if (last === 0 && target > 0) {
+    const bootstrap = Math.max(0, target - 5000);
+    await setCursor(pool, bootstrap);
+    last = bootstrap;
+  }
+
   const fromBlock = last + 1;
   if (fromBlock > target) {
     return { head, target, fromBlock, toBlock: null, processed: 0 };
