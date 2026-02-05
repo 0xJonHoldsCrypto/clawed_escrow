@@ -1,31 +1,31 @@
 import Link from 'next/link';
-import { getTasks, Task } from '@/lib/api';
+import { getTasks, V2Task } from '@/lib/api';
 import { Header } from '@/components/Header';
+import { formatUnits } from 'viem';
 
 function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status}`}>{status}</span>;
 }
 
-function TaskCard({ task }: { task: Task }) {
+function TaskCard({ task }: { task: V2Task }) {
+  const payout = task.payoutAmount ? formatUnits(BigInt(task.payoutAmount), 6) : '0.00';
+
   return (
     <Link href={`/tasks/${task.id}`} className="task-card">
       <div className="card card-clickable">
         <div className="task-card-header">
-          <h3 className="task-card-title">{task.title}</h3>
+          <h3 className="task-card-title">Task #{task.id}</h3>
           <StatusBadge status={task.status} />
         </div>
+
         <p className="task-card-description">
-          {task.instructions}
+          requester: {task.requester ? `${task.requester.slice(0, 6)}...${task.requester.slice(-4)}` : '—'}
         </p>
+
         <div className="task-card-footer">
-          <div className="task-payout">
-            💰 {task.payout.amount} USDC
-            {task.status === 'draft' && (
-              <span className="text-muted text-sm">(awaiting funding)</span>
-            )}
-          </div>
+          <div className="task-payout">💰 {payout} USDC</div>
           <span className="task-meta">
-            {new Date(task.createdAt).toLocaleDateString()}
+            {task.deadline ? `deadline: ${new Date(task.deadline * 1000).toLocaleDateString()}` : ''}
           </span>
         </div>
       </div>
@@ -35,66 +35,27 @@ function TaskCard({ task }: { task: Task }) {
 
 export default async function Home() {
   const tasks = await getTasks();
-  
-  const openTasks = tasks.filter(t => t.status === 'open');
-  const activeTasks = tasks.filter(t => ['claimed', 'submitted'].includes(t.status));
-  const draftTasks = tasks.filter(t => t.status === 'draft');
 
   return (
     <>
       <Header />
       <div className="container">
         <div className="page-header">
-          <h1>Task Board</h1>
-          <p>Browse available tasks, claim work, and earn USDC on Base.</p>
+          <h1>Onchain Task Board</h1>
+          <p>Tasks are managed by the ClawedEscrow contract on Base (metadata is hash-only for now).</p>
         </div>
 
-        {/* Stats */}
-        <div className="stats-grid mb-3">
-          <div className="stat-item">
-            <div className="stat-value">{openTasks.length}</div>
-            <div className="stat-label">Open Tasks</div>
-          </div>
-          <div className="stat-item">
-            <div className="stat-value">{activeTasks.length}</div>
-            <div className="stat-label">In Progress</div>
-          </div>
-          <div className="stat-item">
-            <div className="stat-value">
-              {tasks.reduce((sum, t) => sum + parseFloat(t.payout.amount), 0).toFixed(2)}
-            </div>
-            <div className="stat-label">USDC in Escrow</div>
-          </div>
-        </div>
-
-        {/* Open Tasks */}
-        <h2>🟢 Open Tasks</h2>
-        {openTasks.length === 0 ? (
+        <h2>📋 Tasks</h2>
+        {tasks.length === 0 ? (
           <div className="card">
             <div className="empty-state">
               <div className="empty-state-icon">📭</div>
-              <div className="empty-state-title">No open tasks</div>
-              <p>Create a new task or wait for tasks to be funded.</p>
+              <div className="empty-state-title">No tasks yet</div>
+              <p>Create a new onchain task to start testing.</p>
             </div>
           </div>
         ) : (
-          openTasks.map((task) => <TaskCard key={task.id} task={task} />)
-        )}
-
-        {/* Active Tasks */}
-        {activeTasks.length > 0 && (
-          <>
-            <h2 className="mt-3">🔄 In Progress</h2>
-            {activeTasks.map((task) => <TaskCard key={task.id} task={task} />)}
-          </>
-        )}
-
-        {/* Draft Tasks */}
-        {draftTasks.length > 0 && (
-          <>
-            <h2 className="mt-3">⏳ Awaiting Funding</h2>
-            {draftTasks.map((task) => <TaskCard key={task.id} task={task} />)}
-          </>
+          tasks.map((task) => <TaskCard key={task.id} task={task} />)
         )}
       </div>
     </>

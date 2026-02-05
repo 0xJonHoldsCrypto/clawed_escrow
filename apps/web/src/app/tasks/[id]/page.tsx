@@ -2,8 +2,8 @@ import Link from 'next/link';
 import { getTask, getTaskEvents } from '@/lib/api';
 import { notFound } from 'next/navigation';
 import { Header } from '@/components/Header';
-import TaskActions from './TaskActions';
-import FundingStatus from './FundingStatus';
+import { formatUnits } from 'viem';
+import { ESCROW_ADDRESS } from '@/lib/contracts';
 
 function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status}`}>{status}</span>;
@@ -14,6 +14,8 @@ export default async function TaskPage({ params }: { params: { id: string } }) {
   if (!task) notFound();
 
   const events = await getTaskEvents(params.id);
+  const payout = task.payoutAmount ? formatUnits(BigInt(task.payoutAmount), 6) : '0.00';
+  const balance = task.balance ? formatUnits(BigInt(task.balance), 6) : '0.00';
 
   return (
     <>
@@ -25,108 +27,72 @@ export default async function TaskPage({ params }: { params: { id: string } }) {
 
         <div className="card card-highlight">
           <div className="flex-between mb-2">
-            <h1 style={{ marginBottom: 0 }}>{task.title}</h1>
+            <h1 style={{ marginBottom: 0 }}>Task #{task.id}</h1>
             <StatusBadge status={task.status} />
           </div>
 
-          <p className="text-secondary mb-3" style={{ whiteSpace: 'pre-wrap' }}>
-            {task.instructions}
-          </p>
-
-          {task.tags.length > 0 && (
-            <div className="flex gap-1 mb-3">
-              {task.tags.map((tag) => (
-                <span key={tag} className="badge" style={{ background: 'var(--bg-secondary)' }}>
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
-
           <div className="stats-grid">
             <div className="stat-item">
-              <div className="stat-value text-success">{task.payout.amount}</div>
-              <div className="stat-label">USDC Payout</div>
+              <div className="stat-value text-success">{payout}</div>
+              <div className="stat-label">Payout (USDC)</div>
             </div>
-            {task.fee && (
-              <div className="stat-item">
-                <div className="stat-value">{task.fee}</div>
-                <div className="stat-label">Fee (2%)</div>
-              </div>
-            )}
+            <div className="stat-item">
+              <div className="stat-value">{task.maxWinners ?? '—'}</div>
+              <div className="stat-label">Max Winners</div>
+            </div>
+            <div className="stat-item">
+              <div className="stat-value">{balance}</div>
+              <div className="stat-label">Escrow Balance (USDC)</div>
+            </div>
             <div className="stat-item">
               <div className="stat-value font-mono text-sm">
-                {task.requester.id.slice(0, 6)}...{task.requester.id.slice(-4)}
+                {task.requester ? `${task.requester.slice(0, 6)}...${task.requester.slice(-4)}` : '—'}
               </div>
               <div className="stat-label">Requester</div>
             </div>
-            <div className="stat-item">
-              <div className="stat-value text-sm">
-                {new Date(task.createdAt).toLocaleDateString()}
-              </div>
-              <div className="stat-label">Created</div>
-            </div>
+          </div>
+
+          <div className="mt-2">
+            <p className="text-muted text-sm">
+              Escrow contract: <a href={`https://basescan.org/address/${ESCROW_ADDRESS}`} target="_blank" rel="noopener">{ESCROW_ADDRESS}</a>
+            </p>
+            {task.createdTx && (
+              <p className="text-muted text-sm">
+                Created tx: <a href={`https://basescan.org/tx/${task.createdTx}`} target="_blank" rel="noopener">{task.createdTx.slice(0, 10)}…</a>
+              </p>
+            )}
+            {task.specHash && (
+              <p className="text-muted text-sm">specHash: <span className="font-mono">{task.specHash}</span></p>
+            )}
           </div>
         </div>
 
-        {/* Funding section for draft tasks */}
-        {task.status === 'draft' && task.deposit && (
-          <FundingStatus 
-            taskId={task.id}
-            depositAddress={task.deposit.address}
-            requiredAmount={task.requiredAmount || '0'}
-            payout={task.payout.amount}
-            fee={task.fee || '0'}
-          />
-        )}
-
-        {/* Show funding info if funded */}
-        {task.funding && (
-          <div className="card card-success mt-2">
-            <div className="flex-between">
-              <div>
-                <h2 style={{ marginBottom: '0.25rem' }}>✓ Funded</h2>
-                <p className="text-sm text-secondary">
-                  {task.funding.amount} USDC received
-                </p>
-              </div>
-              {task.funding.txHash && (
-                <a 
-                  href={`https://basescan.org/tx/${task.funding.txHash}`} 
-                  target="_blank" 
-                  rel="noopener" 
-                  className="btn btn-secondary btn-sm"
-                >
-                  View on BaseScan →
-                </a>
-              )}
-            </div>
-          </div>
-        )}
-
-        <TaskActions taskId={task.id} status={task.status} />
-
         <div className="card mt-2">
-          <h2>Activity Log</h2>
+          <h2>Onchain Events (indexed)</h2>
           {events.length === 0 ? (
-            <p className="text-muted">No activity yet.</p>
+            <p className="text-muted">No indexed events yet.</p>
           ) : (
             <div>
-              {events.map((event) => (
-                <div key={event.id} className="activity-item">
+              {events.map((e: any) => (
+                <div key={`${e.tx_hash}:${e.log_index}`} className="activity-item">
                   <div>
-                    <span className="activity-type">{event.type}</span>
-                    <span className="activity-actor">
-                      {' '}by {event.actor.type}:{event.actor.id.slice(0, 8)}...
-                    </span>
+                    <span className="activity-type">{e.event_name}</span>
+                    <span className="activity-actor"> block {e.block_number}</span>
                   </div>
                   <span className="activity-time">
-                    {new Date(event.createdAt).toLocaleString()}
+                    <a href={`https://basescan.org/tx/${e.tx_hash}`} target="_blank" rel="noopener">{e.tx_hash.slice(0, 10)}…</a>
                   </span>
                 </div>
               ))}
             </div>
           )}
+        </div>
+
+        <div className="card mt-2">
+          <h2>Next steps</h2>
+          <p className="text-secondary">
+            The web UI has been switched to the onchain task list and onchain create+fund flow. Claim/submit/approve/withdraw UI is next.
+          </p>
         </div>
       </div>
     </>

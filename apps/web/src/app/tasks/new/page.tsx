@@ -3,74 +3,113 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useAccount, useSignMessage } from 'wagmi';
+import { useAccount, usePublicClient, useWalletClient } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { Header } from '@/components/Header';
-import { buildAuthHeaders } from '@/lib/auth';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://clawedescrow-production.up.railway.app';
+import { decodeEventLog, formatUnits, keccak256, parseUnits, toBytes } from 'viem';
+import { ESCROW_ABI, ERC20_ABI, ESCROW_ADDRESS, USDC_ADDRESS } from '@/lib/contracts';
 
 export default function NewTask() {
   const router = useRouter();
   const { address, isConnected } = useAccount();
-  const { signMessageAsync } = useSignMessage();
+  const publicClient = usePublicClient();
+  const { data: walletClient } = useWalletClient();
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    
-    if (!isConnected || !address) {
+
+    if (!isConnected || !address || !publicClient || !walletClient) {
       setError('Please connect your wallet first');
       return;
     }
-    
+
     setLoading(true);
     setError('');
 
     const form = e.currentTarget;
     const formData = new FormData(form);
 
-    const task = {
-      title: formData.get('title') as string,
-      instructions: formData.get('instructions') as string,
-      tags: (formData.get('tags') as string).split(',').map(t => t.trim()).filter(Boolean),
-      payout: {
-        amount: formData.get('amount') as string,
-        currency: 'USDC_BASE' as const,
-      },
-      requester: {
-        type: 'wallet',
-        id: address,
-      },
-    };
+    const title = String(formData.get('title') || '').trim();
+    const instructions = String(formData.get('instructions') || '').trim();
+    const amountStr = String(formData.get('amount') || '').trim();
+
+    const maxWinners = Number(formData.get('maxWinners') || 1);
+    const deadlineHours = Number(formData.get('deadlineHours') || 24);
+    const reviewHours = Number(formData.get('reviewHours') || 24);
+    const escalationHours = Number(formData.get('escalationHours') || 24);
 
     try {
-      const headers = await buildAuthHeaders({
-        address,
-        signMessageAsync,
-        method: 'POST',
-        path: '/v1/tasks',
-        body: task,
+      const payoutMinor = parseUnits(amountStr as `${number}`, 6);
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + Math.max(1, deadlineHours) * 3600);
+      const reviewWindow = BigInt(Math.max(0, reviewHours) * 3600);
+      const escalationWindow = BigInt(Math.max(0, escalationHours) * 3600);
+
+      // Onchain metadata is hash-only for now. We hash title+instructions so it can be verified offchain.
+      const specHash = keccak256(toBytes(JSON.stringify({ title, instructions })));
+
+      // 1) createTask
+      const createHash = await walletClient.writeContract({
+        address: ESCROW_ADDRESS,
+        abi: ESCROW_ABI,
+        functionName: 'createTask',
+        args: [
+          payoutMinor,
+          BigInt(maxWinners),
+          deadline,
+          reviewWindow,
+          escalationWindow,
+          specHash,
+        ],
       });
 
-      const res = await fetch(`${API_URL}/v1/tasks`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(task),
-      });
+      const createReceipt = await publicClient.waitForTransactionReceipt({ hash: createHash });
 
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error?.message || 'Failed to create task');
+      // Extract taskId from TaskCreated event
+      let taskId: bigint | null = null;
+      for (const log of createReceipt.logs) {
+        try {
+          const decoded: any = decodeEventLog({ abi: ESCROW_ABI as any, data: log.data, topics: log.topics });
+          if (decoded?.eventName === 'TaskCreated') {
+            // args: (taskId, requester, payoutAmount, maxWinners, deadline, specHash)
+            taskId = (decoded?.args?.taskId ?? decoded?.args?.[0] ?? null) as any;
+            if (taskId !== null) break;
+          }
+        } catch {}
       }
+      if (taskId === null) throw new Error('Could not find TaskCreated event in receipt');
 
-      const data = await res.json();
-      router.push(`/tasks/${data.task.id}`);
+      // 2) approve USDC for (payout + depositFee) * maxWinners
+      const depositFeePerWinner = (payoutMinor * 200n) / 10_000n;
+      const total = (payoutMinor + depositFeePerWinner) * BigInt(maxWinners);
+
+      const approveHash = await walletClient.writeContract({
+        address: USDC_ADDRESS,
+        abi: ERC20_ABI,
+        functionName: 'approve',
+        args: [ESCROW_ADDRESS, total],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: approveHash });
+
+      // 3) fundTask
+      const fundHash = await walletClient.writeContract({
+        address: ESCROW_ADDRESS,
+        abi: ESCROW_ABI,
+        functionName: 'fundTask',
+        args: [taskId],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: fundHash });
+
+      router.push(`/tasks/${taskId.toString()}`);
     } catch (err: any) {
-      setError(err.message);
+      setError(err?.shortMessage || err?.message || 'Failed to create+fund task');
       setLoading(false);
+      return;
     }
+
+    setLoading(false);
   }
 
   return (
@@ -78,8 +117,12 @@ export default function NewTask() {
       <Header />
       <div className="container container-sm">
         <div className="page-header">
-          <h1>Create New Task</h1>
-          <p>Post a task and fund it with USDC to have agents complete it.</p>
+          <h1>Create New Onchain Task</h1>
+          <p>
+            This will (1) create the task on Base and (2) approve+fund it with USDC.
+            <br />
+            Metadata is hash-only onchain for now.
+          </p>
         </div>
 
         {error && (
@@ -100,79 +143,60 @@ export default function NewTask() {
         ) : (
           <form onSubmit={handleSubmit} className="card">
             <div className="form-group">
-              <label htmlFor="title">Task Title</label>
-              <input
-                type="text"
-                id="title"
-                name="title"
-                placeholder="What needs to be done?"
-                required
-                maxLength={200}
-              />
+              <label htmlFor="title">Task Title (offchain)</label>
+              <input type="text" id="title" name="title" required maxLength={200} />
             </div>
 
             <div className="form-group">
-              <label htmlFor="instructions">
-                Instructions
-                <span className="label-hint"> — Be specific about what you need</span>
-              </label>
-              <textarea
-                id="instructions"
-                name="instructions"
-                placeholder="Detailed instructions for completing the task. Include any requirements, deliverables, or examples..."
-                required
-                rows={6}
-              />
+              <label htmlFor="instructions">Instructions (offchain)</label>
+              <textarea id="instructions" name="instructions" required rows={6} />
+              <p className="text-muted text-sm mt-1">
+                These are hashed into <span className="font-mono">specHash</span> for now.
+              </p>
             </div>
 
             <div className="form-group">
-              <label htmlFor="tags">
-                Tags
-                <span className="label-hint"> — Comma-separated</span>
-              </label>
-              <input
-                type="text"
-                id="tags"
-                name="tags"
-                placeholder="social, twitter, engagement"
-              />
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="amount">Payout Amount (USDC)</label>
+              <label htmlFor="amount">Payout per winner (USDC)</label>
               <div className="input-with-addon">
                 <span className="input-addon">💵</span>
-                <input
-                  type="text"
-                  id="amount"
-                  name="amount"
-                  placeholder="5.00"
-                  required
-                  pattern="^\d+(\.\d{1,6})?$"
-                />
+                <input type="text" id="amount" name="amount" placeholder="0.10" required pattern="^\d+(\.\d{1,6})?$" />
               </div>
-              <p className="text-muted text-sm mt-1">
-                A 2% protocol fee will be added. You'll fund: payout + fee.
-              </p>
+              <p className="text-muted text-sm mt-1">A 2% creator fee is charged at funding.</p>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="maxWinners">Completions accepted (max winners)</label>
+              <input type="number" id="maxWinners" name="maxWinners" min={1} defaultValue={1} required />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="deadlineHours">Deadline (hours from now)</label>
+              <input type="number" id="deadlineHours" name="deadlineHours" min={1} defaultValue={24} required />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="reviewHours">Review window (hours)</label>
+              <input type="number" id="reviewHours" name="reviewHours" min={0} defaultValue={24} required />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="escalationHours">Escalation window (hours)</label>
+              <input type="number" id="escalationHours" name="escalationHours" min={0} defaultValue={24} required />
             </div>
 
             <div className="form-group">
               <label>Your Wallet</label>
               <div className="deposit-box">
                 <p className="deposit-address">{address}</p>
-                <p className="text-muted text-sm">
-                  This wallet will receive the escrow refund if the task is cancelled.
-                </p>
+                <p className="text-muted text-sm">This wallet is the onchain requester.</p>
               </div>
             </div>
 
             <div className="flex gap-2 mt-3">
               <button type="submit" className="btn btn-primary btn-lg" disabled={loading}>
-                {loading ? 'Creating...' : 'Create Task'}
+                {loading ? 'Creating & Funding…' : 'Create & Fund Onchain Task'}
               </button>
-              <Link href="/" className="btn btn-secondary btn-lg">
-                Cancel
-              </Link>
+              <Link href="/" className="btn btn-secondary btn-lg">Cancel</Link>
             </div>
           </form>
         )}
