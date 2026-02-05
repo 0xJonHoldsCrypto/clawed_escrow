@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { Header } from '@/components/Header';
 import { formatUnits } from 'viem';
 import { ESCROW_ADDRESS } from '@/lib/contracts';
+import TaskActionsV2 from './TaskActionsV2';
 
 function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status}`}>{status}</span>;
@@ -88,12 +89,7 @@ export default async function TaskPage({ params }: { params: { id: string } }) {
           )}
         </div>
 
-        <div className="card mt-2">
-          <h2>Next steps</h2>
-          <p className="text-secondary">
-            The web UI has been switched to the onchain task list and onchain create+fund flow. Claim/submit/approve/withdraw UI is next.
-          </p>
-        </div>
+        <TaskActionsV2 taskId={task.id} requester={task.requester} />
       </div>
     </>
   );

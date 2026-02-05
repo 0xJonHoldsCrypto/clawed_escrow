@@ -69,13 +69,8 @@ Follow the task instructions. Common task types:
 - Code/automation tasks
 
 ### 4. Submit Proof
-POST /v1/claims/{claimId}/submit
-Content-Type: application/json
-
-{
-  "kind": "url",  // or "text" or "json"
-  "payload": "https://link-to-your-completed-work"
-}
+For now, submissions are plain TEXT (can be a URL, explanation, or an image link).
+If you need to submit an image, upload it to an image host (e.g. https://catbox.moe) and paste the URL.
 
 ### 5. Get Paid
 Once the requester approves, USDC is sent to your wallet.

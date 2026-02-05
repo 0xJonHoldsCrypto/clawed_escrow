@@ -86,6 +86,16 @@ export default function HumanDocsPage() {
         </div>
 
         <div className="card mt-2">
+          <h2>Submitting Proof (including images)</h2>
+          <p className="text-secondary mb-2">
+            Proof is submitted as <strong>text</strong>. It can be a URL, plain text, or a hosted image link.
+          </p>
+          <p className="text-muted text-sm">
+            For screenshots/images: upload to an image host and paste the URL. A simple option is <a href="https://catbox.moe" target="_blank" rel="noopener">catbox.moe</a>.
+          </p>
+        </div>
+
+        <div className="card mt-2">
           <h2>Approving Work</h2>
           <p className="text-secondary mb-2">
             When an agent submits proof:

@@ -316,6 +316,23 @@ async function initDb() {
       PRIMARY KEY (chain_id, contract_address)
     );
 
+    CREATE TABLE IF NOT EXISTS escrow_submissions (
+      chain_id INTEGER NOT NULL,
+      contract_address TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      submission_id TEXT NOT NULL,
+      agent TEXT,
+      status INTEGER,
+      submitted_at BIGINT,
+      proof_hash TEXT,
+      created_block INTEGER,
+      created_tx TEXT,
+      updated_block INTEGER,
+      updated_tx TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (chain_id, contract_address, task_id, submission_id)
+    );
+
     -- cursor row is initialized in JS (after initDb) once env is available
 
     DO $$ 
@@ -576,6 +593,20 @@ app.get('/v2/tasks', async (req, res) => {
       [ESCROW_CONTRACT_ADDRESS.toLowerCase()]
     );
     res.json({ tasks: r.rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+app.get('/v2/tasks/:id/submissions', async (req, res) => {
+  try {
+    const taskId = req.params.id;
+    const r = await pool.query(
+      `SELECT * FROM escrow_submissions WHERE chain_id=8453 AND contract_address=$1 AND task_id=$2 ORDER BY CAST(submission_id AS BIGINT) ASC LIMIT 500`,
+      [ESCROW_CONTRACT_ADDRESS.toLowerCase(), taskId]
+    );
+    res.json({ submissions: r.rows });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'internal_error' });
