@@ -89,7 +89,7 @@ export default async function TaskPage({ params }: { params: { id: string } }) {
           )}
         </div>
 
-        <TaskActionsV2 taskId={task.id} requester={task.requester} />
+        <TaskActionsV2 taskId={task.id} requester={task.requester} payoutAmount={task.payoutAmount} />
       </div>
     </>
   );

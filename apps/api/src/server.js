@@ -333,6 +333,21 @@ async function initDb() {
       PRIMARY KEY (chain_id, contract_address, task_id, submission_id)
     );
 
+    CREATE TABLE IF NOT EXISTS escrow_submission_proofs (
+      chain_id INTEGER NOT NULL,
+      contract_address TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      submission_id TEXT NOT NULL,
+      wallet TEXT NOT NULL,
+      proof_text TEXT NOT NULL,
+      proof_hash TEXT NOT NULL,
+      tx_hash TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS escrow_submission_proofs_lookup
+      ON escrow_submission_proofs (chain_id, contract_address, task_id, submission_id, created_at DESC);
+
     -- cursor row is initialized in JS (after initDb) once env is available
 
     DO $$ 
@@ -549,6 +564,12 @@ const Submit = z.object({
   payload: z.any()
 });
 
+const V2ProofSave = z.object({
+  proofText: z.string().min(1).max(20000),
+  proofHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/),
+  txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
+});
+
 // ============ Routes ============
 
 // ===== v2 (onchain) =====
@@ -603,10 +624,62 @@ app.get('/v2/tasks/:id/submissions', async (req, res) => {
   try {
     const taskId = req.params.id;
     const r = await pool.query(
-      `SELECT * FROM escrow_submissions WHERE chain_id=8453 AND contract_address=$1 AND task_id=$2 ORDER BY CAST(submission_id AS BIGINT) ASC LIMIT 500`,
+      `SELECT s.*, p.proof_text
+       FROM escrow_submissions s
+       LEFT JOIN LATERAL (
+         SELECT proof_text
+         FROM escrow_submission_proofs p
+         WHERE p.chain_id=s.chain_id AND p.contract_address=s.contract_address AND p.task_id=s.task_id AND p.submission_id=s.submission_id
+         ORDER BY p.created_at DESC
+         LIMIT 1
+       ) p ON TRUE
+       WHERE s.chain_id=8453 AND s.contract_address=$1 AND s.task_id=$2
+       ORDER BY CAST(s.submission_id AS BIGINT) ASC
+       LIMIT 500`,
       [ESCROW_CONTRACT_ADDRESS.toLowerCase(), taskId]
     );
     res.json({ submissions: r.rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// Save offchain proof text for a submission (so requesters can see it).
+// Auth required; wallet must match the agent that claimed the submission.
+app.post('/v2/tasks/:id/submissions/:submissionId/proof', requireAuth, async (req, res) => {
+  try {
+    const taskId = req.params.id;
+    const submissionId = req.params.submissionId;
+
+    const parsed = V2ProofSave.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+    // must match agent wallet
+    const s = await pool.query(
+      `SELECT agent, proof_hash FROM escrow_submissions WHERE chain_id=8453 AND contract_address=$1 AND task_id=$2 AND submission_id=$3`,
+      [ESCROW_CONTRACT_ADDRESS.toLowerCase(), taskId, submissionId]
+    );
+    if (s.rows.length === 0) return res.status(404).json({ error: 'submission_not_found' });
+
+    const agent = (s.rows[0].agent || '').toLowerCase();
+    if (!agent || agent !== req.wallet) {
+      return res.status(403).json({ error: 'not_agent', message: 'Only the claiming agent can attach proof text.' });
+    }
+
+    // Ensure proofHash matches what indexer saw onchain (best-effort)
+    const onchainHash = s.rows[0].proof_hash;
+    if (onchainHash && String(onchainHash).toLowerCase() !== parsed.data.proofHash.toLowerCase()) {
+      return res.status(409).json({ error: 'proof_hash_mismatch', onchain: onchainHash, provided: parsed.data.proofHash });
+    }
+
+    await pool.query(
+      `INSERT INTO escrow_submission_proofs (chain_id, contract_address, task_id, submission_id, wallet, proof_text, proof_hash, tx_hash)
+       VALUES (8453, $1, $2, $3, $4, $5, $6, $7)`,
+      [ESCROW_CONTRACT_ADDRESS.toLowerCase(), taskId, submissionId, req.wallet, parsed.data.proofText, parsed.data.proofHash, parsed.data.txHash ?? null]
+    );
+
+    res.json({ ok: true });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'internal_error' });

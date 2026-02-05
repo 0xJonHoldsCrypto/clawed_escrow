@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useAccount, usePublicClient, useWalletClient } from 'wagmi';
-import { decodeEventLog, keccak256, toBytes } from 'viem';
+import { useAccount, usePublicClient, useWalletClient, useSignMessage } from 'wagmi';
+import { decodeEventLog, formatUnits, keccak256, toBytes } from 'viem';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { ESCROW_ABI, ESCROW_ADDRESS } from '@/lib/contracts';
+import { buildAuthHeaders } from '@/lib/auth';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://clawedescrow-production.up.railway.app';
 
@@ -14,6 +15,7 @@ type SubmissionRow = {
   agent: string | null;
   status: number | null;
   proof_hash: string | null;
+  proof_text?: string | null;
   submitted_at: number | null;
   created_block: number | null;
   created_tx: string | null;
@@ -33,10 +35,19 @@ function statusLabel(s: number | null | undefined): string {
   return 'unknown';
 }
 
-export default function TaskActionsV2({ taskId, requester }: { taskId: string; requester: string | null }) {
+export default function TaskActionsV2({
+  taskId,
+  requester,
+  payoutAmount,
+}: {
+  taskId: string;
+  requester: string | null;
+  payoutAmount: string | null;
+}) {
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient();
+  const { signMessageAsync } = useSignMessage();
 
   const isRequester = useMemo(() => {
     if (!address || !requester) return false;
@@ -46,6 +57,7 @@ export default function TaskActionsV2({ taskId, requester }: { taskId: string; r
   const [submissions, setSubmissions] = useState<SubmissionRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
+  const [notice, setNotice] = useState<string>('');
 
   const [mySubmissionId, setMySubmissionId] = useState<string>('');
   const [proofText, setProofText] = useState<string>('');
@@ -74,10 +86,16 @@ export default function TaskActionsV2({ taskId, requester }: { taskId: string; r
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId, address]);
 
-  async function claim() {
+  const payout = payoutAmount ? formatUnits(BigInt(payoutAmount), 6) : null;
+  const recipientFee = payoutAmount ? (BigInt(payoutAmount) * 200n) / 10_000n : null;
+  const netPayout = payoutAmount && recipientFee != null ? BigInt(payoutAmount) - recipientFee : null;
+  const netPayoutUi = netPayout != null ? formatUnits(netPayout, 6) : null;
+
+  async function startTask() {
     if (!walletClient || !publicClient) return;
     setLoading(true);
     setError('');
+    setNotice('');
 
     try {
       const hash = await walletClient.writeContract({
@@ -104,10 +122,15 @@ export default function TaskActionsV2({ taskId, requester }: { taskId: string; r
         } catch {}
       }
 
-      if (submissionId) setMySubmissionId(submissionId);
+      if (submissionId) {
+        setMySubmissionId(submissionId);
+        setNotice(`Started. Your submissionId is #${submissionId}.`);
+      } else {
+        setNotice('Started task. Waiting for indexer to pick up your submissionId…');
+      }
       await refresh();
     } catch (e: any) {
-      setError(e?.shortMessage || e?.message || 'Claim failed');
+      setError(e?.shortMessage || e?.message || 'Start Task failed');
     } finally {
       setLoading(false);
     }
@@ -116,21 +139,43 @@ export default function TaskActionsV2({ taskId, requester }: { taskId: string; r
   async function submitProof() {
     if (!walletClient || !publicClient) return;
     if (!mySubmissionId) {
-      setError('Missing submissionId. Claim first, or enter one from the submissions list.');
+      setError('Missing submissionId. Click Start Task first (or wait for the indexer to show your submission).');
       return;
     }
+    if (!address) return;
+
     setLoading(true);
     setError('');
+    setNotice('');
 
     try {
       const proofHash = keccak256(toBytes(proofText));
-      const hash = await walletClient.writeContract({
+      const txHash = await walletClient.writeContract({
         address: ESCROW_ADDRESS,
         abi: ESCROW_ABI,
         functionName: 'submitProof',
         args: [BigInt(taskId), BigInt(mySubmissionId), proofHash],
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+      // Save offchain proof text so requesters can see it.
+      try {
+        const body = { proofText, proofHash, txHash };
+        const path = `/v2/tasks/${taskId}/submissions/${mySubmissionId}/proof`;
+        const headers = await buildAuthHeaders({
+          address,
+          signMessageAsync,
+          method: 'POST',
+          path,
+          body,
+        });
+        await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+      } catch {
+        // ignore; onchain still succeeded
+      }
+
+      setNotice('Proof submitted. Waiting for requester approval…');
+      setProofText('');
       await refresh();
     } catch (e: any) {
       setError(e?.shortMessage || e?.message || 'Submit proof failed');
@@ -139,23 +184,26 @@ export default function TaskActionsV2({ taskId, requester }: { taskId: string; r
     }
   }
 
-  async function approve() {
+  async function approve(submissionId?: string) {
     if (!walletClient || !publicClient) return;
-    if (!approveSubmissionId) {
-      setError('Enter a submissionId to approve.');
+    const sid = submissionId || approveSubmissionId;
+    if (!sid) {
+      setError('Pick a submission to approve.');
       return;
     }
     setLoading(true);
     setError('');
+    setNotice('');
 
     try {
       const hash = await walletClient.writeContract({
         address: ESCROW_ADDRESS,
         abi: ESCROW_ABI,
         functionName: 'approve',
-        args: [BigInt(taskId), BigInt(approveSubmissionId)],
+        args: [BigInt(taskId), BigInt(sid)],
       });
       await publicClient.waitForTransactionReceipt({ hash });
+      setNotice(`Approved submission #${sid}. Agent can now claim payout.`);
       await refresh();
     } catch (e: any) {
       setError(e?.shortMessage || e?.message || 'Approve failed');
@@ -164,10 +212,11 @@ export default function TaskActionsV2({ taskId, requester }: { taskId: string; r
     }
   }
 
-  async function withdraw(submissionId: string) {
+  async function claimPayout(submissionId: string) {
     if (!walletClient || !publicClient) return;
     setLoading(true);
     setError('');
+    setNotice('');
 
     try {
       const hash = await walletClient.writeContract({
@@ -177,9 +226,10 @@ export default function TaskActionsV2({ taskId, requester }: { taskId: string; r
         args: [BigInt(taskId), BigInt(submissionId)],
       });
       await publicClient.waitForTransactionReceipt({ hash });
+      setNotice('Payout claimed.');
       await refresh();
     } catch (e: any) {
-      setError(e?.shortMessage || e?.message || 'Withdraw failed');
+      setError(e?.shortMessage || e?.message || 'Claim payout failed');
     } finally {
       setLoading(false);
     }
@@ -192,6 +242,12 @@ export default function TaskActionsV2({ taskId, requester }: { taskId: string; r
       {error && (
         <div className="card card-error mb-2">
           <p className="text-error">{error}</p>
+        </div>
+      )}
+
+      {notice && (
+        <div className="card mb-2" style={{ background: 'var(--bg)' }}>
+          <p className="text-secondary">{notice}</p>
         </div>
       )}
 
@@ -216,6 +272,11 @@ export default function TaskActionsV2({ taskId, requester }: { taskId: string; r
                       <span className="activity-actor">
                         agent {s.agent ? `${s.agent.slice(0, 6)}...${s.agent.slice(-4)}` : '—'}
                       </span>
+                      {s.proof_text && (
+                        <div className="text-muted text-sm" style={{ marginTop: '0.25rem', whiteSpace: 'pre-wrap' }}>
+                          <strong>Proof:</strong> {s.proof_text}
+                        </div>
+                      )}
                     </div>
                     <span className="activity-time">
                       {s.created_tx ? (
@@ -223,8 +284,14 @@ export default function TaskActionsV2({ taskId, requester }: { taskId: string; r
                       ) : null}
                     </span>
                     {address && s.agent && s.agent.toLowerCase() === address.toLowerCase() && statusLabel(s.status) === 'approved' && (
-                      <button className="btn btn-primary btn-sm" disabled={loading} onClick={() => withdraw(String(s.submission_id))}>
-                        Withdraw
+                      <button className="btn btn-primary btn-sm" disabled={loading} onClick={() => claimPayout(String(s.submission_id))}>
+                        Claim{netPayoutUi ? ` ${netPayoutUi} USDC` : ''}
+                      </button>
+                    )}
+
+                    {isRequester && statusLabel(s.status) === 'submitted' && (
+                      <button className="btn btn-success btn-sm" disabled={loading} onClick={() => approve(String(s.submission_id))}>
+                        Approve
                       </button>
                     )}
                   </div>
@@ -237,7 +304,7 @@ export default function TaskActionsV2({ taskId, requester }: { taskId: string; r
           <div className="mt-2">
             <h3>Agent flow</h3>
             <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
-              <button className="btn btn-primary" disabled={loading} onClick={claim}>Claim</button>
+              <button className="btn btn-primary" disabled={loading} onClick={startTask}>Start Task</button>
               <input
                 className="input"
                 style={{ minWidth: 180 }}
@@ -261,20 +328,8 @@ export default function TaskActionsV2({ taskId, requester }: { taskId: string; r
           {isRequester && (
             <div className="mt-2">
               <h3>Requester flow</h3>
-              <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
-                <input
-                  className="input"
-                  style={{ minWidth: 220 }}
-                  placeholder="submissionId to approve"
-                  value={approveSubmissionId}
-                  onChange={(e) => setApproveSubmissionId(e.target.value)}
-                />
-                <button className="btn btn-success" disabled={loading} onClick={approve}>
-                  Approve
-                </button>
-              </div>
-              <p className="text-muted text-sm mt-1">
-                Approval is onchain and final. Agent must then withdraw.
+              <p className="text-muted text-sm">
+                Approve directly from the Submissions list above (no manual submissionId entry).
               </p>
             </div>
           )}
