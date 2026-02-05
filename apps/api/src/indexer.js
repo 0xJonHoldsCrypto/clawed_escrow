@@ -85,14 +85,19 @@ export async function indexOnce({ pool, confirmations = 15, batchBlocks = 1500 }
     }
 
     const eventName = parsed.name;
+
+    // Build named args robustly.
+    // ethers Result often has non-enumerable named keys; rely on the event fragment inputs instead.
     const args = {};
-    for (const [k, v] of Object.entries(parsed.args)) {
-      if (!isNaN(Number(k))) continue;
-      // bigint → string
-      args[k] = typeof v === 'bigint' ? v.toString() : v;
+    const inputs = parsed.eventFragment?.inputs || [];
+    for (let i = 0; i < inputs.length; i++) {
+      const name = inputs[i]?.name || String(i);
+      const v = parsed.args?.[i];
+      args[name] = typeof v === 'bigint' ? v.toString() : v;
     }
 
-    const taskId = args.taskId != null ? String(args.taskId) : null;
+    const taskIdRaw = parsed.args?.taskId ?? parsed.args?.[0] ?? null;
+    const taskId = taskIdRaw != null ? String(taskIdRaw) : null;
 
     await pool.query(
       `INSERT INTO escrow_events (chain_id, contract_address, tx_hash, log_index, block_number, block_hash, event_name, task_id, args)
