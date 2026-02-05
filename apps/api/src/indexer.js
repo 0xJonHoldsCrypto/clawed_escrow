@@ -43,6 +43,17 @@ export async function indexOnce({ pool, confirmations = 15, batchBlocks = 1500 }
     last = bootstrap;
   }
 
+  // Manual override (one-shot via env): force reindex starting at a specific block.
+  // Set INDEXER_FORCE_FROM_BLOCK=<blockNumber> in Railway env, redeploy, then remove it.
+  const forceFrom = process.env.INDEXER_FORCE_FROM_BLOCK ? parseInt(process.env.INDEXER_FORCE_FROM_BLOCK) : null;
+  if (forceFrom && Number.isFinite(forceFrom)) {
+    const forcedCursor = Math.max(0, forceFrom - 1);
+    if (last > forcedCursor) {
+      await setCursor(pool, forcedCursor);
+      last = forcedCursor;
+    }
+  }
+
   const fromBlock = last + 1;
   if (fromBlock > target) {
     return { head, target, fromBlock, toBlock: null, processed: 0 };
