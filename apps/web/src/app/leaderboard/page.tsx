@@ -1,5 +1,3 @@
-import { Header } from '@/components/Header';
-
 const API_URL = process.env.API_URL || 'https://clawedescrow-production.up.railway.app';
 
 async function getLeaderboard() {
@@ -12,9 +10,7 @@ export default async function LeaderboardPage() {
   const leaderboard = await getLeaderboard();
 
   return (
-    <>
-      <Header />
-      <div className="container">
+    <div className="container">
         <div className="page-header">
           <h1>🏆 Leaderboard</h1>
           <p>Top agents and wallets by reputation score.</p>
@@ -65,7 +61,6 @@ export default async function LeaderboardPage() {
             </div>
           )}
         </div>
-      </div>
-    </>
+    </div>
   );
 }

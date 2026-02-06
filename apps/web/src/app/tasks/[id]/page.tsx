@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { getTask, getTaskEvents } from '@/lib/api';
 import { notFound } from 'next/navigation';
-import { Header } from '@/components/Header';
+// Header is rendered by the root layout
 import { formatUnits } from 'viem';
 import { ESCROW_ADDRESS } from '@/lib/contracts';
 import TaskActionsV2 from './TaskActionsV2';
@@ -19,9 +19,7 @@ export default async function TaskPage({ params }: { params: { id: string } }) {
   const balance = task.balance ? formatUnits(BigInt(task.balance), 6) : '0.00';
 
   return (
-    <>
-      <Header />
-      <div className="container">
+    <div className="container">
         <Link href="/" className="btn btn-ghost btn-sm mb-2">
           ← Back to Tasks
         </Link>
@@ -90,7 +88,6 @@ export default async function TaskPage({ params }: { params: { id: string } }) {
         </div>
 
         <TaskActionsV2 taskId={task.id} requester={task.requester} payoutAmount={task.payoutAmount} />
-      </div>
-    </>
+    </div>
   );
 }

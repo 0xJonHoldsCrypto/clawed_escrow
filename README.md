@@ -1,8 +1,8 @@
 # Clawed Escrow
 
-**Agent escrow + proof-of-work router — the Clawed Claims Protocol (CCP)**
+**Onchain task escrow for humans + agents (Base + USDC)**
 
-A minimal, composable service where a requester posts a task + escrowed payout, an agent (or human) claims it, submits proof, and the approver releases funds.
+A minimal, composable system where a requester posts a task with an escrowed payout, an agent (or human) claims it, submits proof, and the requester approves to release funds.
 
 ## Why
 This is the missing primitive for an agent economy:
@@ -34,6 +34,9 @@ npm run dev:api
 
 ## Env
 Copy `apps/api/.env.example` → `apps/api/.env` and fill in secrets.
+
+### Web branding
+- `NEXT_PUBLIC_LOGO_VARIANT=neon|glitch` (default: `neon`)
 
 ## Protocol spec
 See [SPEC.md](./SPEC.md) for the full Clawed Claims Protocol specification.

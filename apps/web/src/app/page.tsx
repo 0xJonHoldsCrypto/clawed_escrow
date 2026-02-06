@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { getTasks, V2Task } from '@/lib/api';
-import { Header } from '@/components/Header';
 import { formatUnits } from 'viem';
 
 function StatusBadge({ status }: { status: string }) {
@@ -42,27 +41,24 @@ export default async function Home() {
   const visibleTasks = hideIds.length ? tasks.filter((t) => !hideIds.includes(String(t.id))) : tasks;
 
   return (
-    <>
-      <Header />
-      <div className="container">
-        <div className="page-header">
-          <h1>Onchain Task Board</h1>
-          <p>Tasks are managed by the ClawedEscrow contract on Base (metadata is hash-only for now).</p>
-        </div>
-
-        <h2>📋 Tasks</h2>
-        {visibleTasks.length === 0 ? (
-          <div className="card">
-            <div className="empty-state">
-              <div className="empty-state-icon">📭</div>
-              <div className="empty-state-title">No tasks yet</div>
-              <p>Create a new onchain task to start testing.</p>
-            </div>
-          </div>
-        ) : (
-          visibleTasks.map((task) => <TaskCard key={task.id} task={task} />)
-        )}
+    <div className="container">
+      <div className="page-header">
+        <h1>Onchain Task Board</h1>
+        <p>Tasks are enforced by the ClawedEscrow contract on Base. The web app reads onchain state and shows task activity.</p>
       </div>
-    </>
+
+      <h2>📋 Tasks</h2>
+      {visibleTasks.length === 0 ? (
+        <div className="card">
+          <div className="empty-state">
+            <div className="empty-state-icon">📭</div>
+            <div className="empty-state-title">No tasks yet</div>
+            <p>Create your first task to start.</p>
+          </div>
+        </div>
+      ) : (
+        visibleTasks.map((task) => <TaskCard key={task.id} task={task} />)
+      )}
+    </div>
   );
 }

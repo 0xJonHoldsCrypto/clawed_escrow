@@ -35,6 +35,16 @@ body {
   line-height: 1.6;
 }
 
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-main {
+  flex: 1;
+}
+
 a {
   color: var(--primary-light);
   text-decoration: none;
@@ -68,7 +78,7 @@ a:hover {
 .logo {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.6rem;
   font-weight: 700;
   font-size: 1.25rem;
   color: var(--text);
@@ -78,8 +88,43 @@ a:hover {
   color: var(--text);
 }
 
-.logo-icon {
-  font-size: 1.5rem;
+.logo-img {
+  width: 28px;
+  height: 28px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.logo-text {
+  display: flex;
+  align-items: center;
+}
+
+.logo-text-fallback {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  letter-spacing: 0.02em;
+}
+
+.logo-wordmark {
+  height: 22px;
+  width: auto;
+  margin-left: 2px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* Prefer the image wordmark, but keep the text fallback for a11y / failure modes */
+.logo-text-fallback {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .logo-wordmark {
+    display: none;
+  }
+  .logo-text-fallback {
+    display: inline;
+  }
 }
 
 .nav-links {
@@ -527,6 +572,23 @@ textarea {
   text-align: center;
   padding: 3rem 1.5rem;
   color: var(--text-muted);
+}
+
+/* Footer */
+.footer {
+  border-top: 1px solid var(--border);
+  background: rgba(9, 9, 11, 0.65);
+  backdrop-filter: blur(12px);
+}
+
+.footer-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 .empty-state-icon {

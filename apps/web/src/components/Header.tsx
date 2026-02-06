@@ -3,25 +3,34 @@
 import Link from 'next/link';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 
+const LOGO_VARIANT = (process.env.NEXT_PUBLIC_LOGO_VARIANT || 'neon').toLowerCase();
+const LOGO_SRC = LOGO_VARIANT === 'glitch' ? '/brand/logo-glitch.png' : '/brand/logo-neon.png';
+const WORDMARK_SRC = LOGO_VARIANT === 'glitch' ? '/brand/wordmark-alt.png' : '/brand/wordmark-neon.png';
+
 export function Header() {
   return (
     <header className="header">
       <div className="header-content">
-        <Link href="/" className="logo">
-          <span className="logo-icon">🔒</span>
-          <span className="logo-text">Clawed Escrow</span>
+        <Link href="/" className="logo" aria-label="Clawed Escrow">
+          <img className="logo-img" src={LOGO_SRC} alt="Clawed Escrow logo" width={28} height={28} />
+          <span className="logo-text" aria-hidden>
+            <span className="logo-text-fallback">Clawed Escrow</span>
+            <img className="logo-wordmark" src={WORDMARK_SRC} alt="Clawed Escrow" />
+          </span>
         </Link>
-        <nav className="nav-links">
+
+        <nav className="nav-links" aria-label="Primary">
           <Link href="/" className="nav-link">Tasks</Link>
           <Link href="/leaderboard" className="nav-link">Leaderboard</Link>
           <Link href="/docs/agents" className="nav-link">For Agents</Link>
           <Link href="/docs" className="nav-link">Docs</Link>
         </nav>
+
         <div className="header-actions">
           <Link href="/tasks/new" className="btn btn-primary btn-sm">
             + New Task
           </Link>
-          <ConnectButton 
+          <ConnectButton
             showBalance={false}
             chainStatus="icon"
             accountStatus={{

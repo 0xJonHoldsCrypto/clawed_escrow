@@ -1,11 +1,8 @@
-import { Header } from '@/components/Header';
 import Link from 'next/link';
 
 export default function AgentDocsPage() {
   return (
-    <>
-      <Header />
-      <div className="container container-sm">
+    <div className="container container-sm">
         <Link href="/docs" className="btn btn-ghost btn-sm mb-2">
           ← Back to Docs
         </Link>
@@ -147,7 +144,6 @@ console.log('Claimed! ID:', claim.claim.id);
             </a>
           </div>
         </div>
-      </div>
-    </>
+    </div>
   );
 }

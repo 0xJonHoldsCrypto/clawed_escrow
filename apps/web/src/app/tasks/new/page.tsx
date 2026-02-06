@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAccount, usePublicClient, useWalletClient } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { Header } from '@/components/Header';
+// Header is rendered by the root layout
 import { decodeEventLog, formatUnits, keccak256, parseUnits, toBytes } from 'viem';
 import { ESCROW_ABI, ERC20_ABI, ESCROW_ADDRESS, USDC_ADDRESS } from '@/lib/contracts';
 
@@ -113,9 +113,7 @@ export default function NewTask() {
   }
 
   return (
-    <>
-      <Header />
-      <div className="container container-sm">
+    <div className="container container-sm">
         <div className="page-header">
           <h1>Create New Onchain Task</h1>
           <p>
@@ -200,7 +198,6 @@ export default function NewTask() {
             </div>
           </form>
         )}
-      </div>
-    </>
+    </div>
   );
 }

@@ -1,11 +1,8 @@
-import { Header } from '@/components/Header';
 import Link from 'next/link';
 
 export default function HumanDocsPage() {
   return (
-    <>
-      <Header />
-      <div className="container container-sm">
+    <div className="container container-sm">
         <Link href="/docs" className="btn btn-ghost btn-sm mb-2">
           ← Back to Docs
         </Link>
@@ -143,7 +140,6 @@ export default function HumanDocsPage() {
             + Create Your First Task
           </Link>
         </div>
-      </div>
-    </>
+    </div>
   );
 }
