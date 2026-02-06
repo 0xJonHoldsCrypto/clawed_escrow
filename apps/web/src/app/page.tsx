@@ -35,6 +35,11 @@ function TaskCard({ task }: { task: V2Task }) {
 
 export default async function Home() {
   const tasks = await getTasks();
+  const hideIds = (process.env.NEXT_PUBLIC_HIDE_TASK_IDS || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const visibleTasks = hideIds.length ? tasks.filter((t) => !hideIds.includes(String(t.id))) : tasks;
 
   return (
     <>
@@ -46,7 +51,7 @@ export default async function Home() {
         </div>
 
         <h2>📋 Tasks</h2>
-        {tasks.length === 0 ? (
+        {visibleTasks.length === 0 ? (
           <div className="card">
             <div className="empty-state">
               <div className="empty-state-icon">📭</div>
@@ -55,7 +60,7 @@ export default async function Home() {
             </div>
           </div>
         ) : (
-          tasks.map((task) => <TaskCard key={task.id} task={task} />)
+          visibleTasks.map((task) => <TaskCard key={task.id} task={task} />)
         )}
       </div>
     </>

@@ -5,8 +5,8 @@ import { ethers } from 'ethers';
 import crypto from 'crypto';
 
 // Onchain (v2)
-import { ESCROW_CONTRACT_ADDRESS, escrow as escrowContract, provider as baseProvider } from './contract.js';
-import { indexOnce, ensureCursorRow, getCursor } from './indexer.js';
+import { ESCROW_CONTRACT_ADDRESS, escrow as escrowContract, provider as baseProvider, wsProvider } from './contract.js';
+import { indexOnce, ensureCursorRow, getCursor, processEscrowLog, TOPICS } from './indexer.js';
 
 const { Pool } = pg;
 
@@ -380,20 +380,37 @@ async function initDb() {
 // ============ v2 indexer loop (best-effort) ============
 let indexerState = { last: null, error: null };
 async function startIndexer() {
-  // Run once immediately, then every ~10s.
-  try {
-    await indexOnce({ pool, confirmations: INDEXER_CONFIRMATIONS, batchBlocks: INDEXER_BATCH_BLOCKS });
-  } catch (e) {
-    indexerState.error = String(e?.message || e);
-  }
-  setInterval(async () => {
+  // Backfill loop (HTTP getLogs)
+  const runOnce = async () => {
     try {
       indexerState.last = await indexOnce({ pool, confirmations: INDEXER_CONFIRMATIONS, batchBlocks: INDEXER_BATCH_BLOCKS });
       indexerState.error = null;
     } catch (e) {
       indexerState.error = String(e?.message || e);
     }
-  }, 10_000);
+  };
+
+  await runOnce();
+  setInterval(runOnce, 10_000);
+
+  // Tail via websocket (optional) for near-instant UX
+  if (wsProvider) {
+    try {
+      const filter = { address: ESCROW_CONTRACT_ADDRESS, topics: [TOPICS] };
+      wsProvider.on(filter, async (log) => {
+        try {
+          // ethers ws log shape is compatible with Interface.parseLog
+          await processEscrowLog({ pool, log });
+        } catch (e) {
+          // don't kill the ws stream
+          indexerState.error = String(e?.message || e);
+        }
+      });
+      console.log('[v2] ws tailing enabled');
+    } catch (e) {
+      console.error('[v2] ws tailing failed to start', e);
+    }
+  }
 }
 
 const app = express();
@@ -623,9 +640,21 @@ app.get('/v2/tasks', async (req, res) => {
 app.get('/v2/tasks/:id/submissions', async (req, res) => {
   try {
     const taskId = req.params.id;
+    const viewer = req.wallet ? String(req.wallet).toLowerCase() : null;
+
+    // Only show proof_text to the requester or the submitting agent.
     const r = await pool.query(
-      `SELECT s.*, p.proof_text
+      `SELECT 
+        s.*,
+        CASE
+          WHEN $3::text IS NOT NULL AND (
+            LOWER(s.agent) = $3 OR LOWER(t.requester) = $3
+          ) THEN p.proof_text
+          ELSE NULL
+        END AS proof_text
        FROM escrow_submissions s
+       LEFT JOIN escrow_tasks t
+         ON t.chain_id=s.chain_id AND t.contract_address=s.contract_address AND t.task_id=s.task_id
        LEFT JOIN LATERAL (
          SELECT proof_text
          FROM escrow_submission_proofs p
@@ -636,8 +665,9 @@ app.get('/v2/tasks/:id/submissions', async (req, res) => {
        WHERE s.chain_id=8453 AND s.contract_address=$1 AND s.task_id=$2
        ORDER BY CAST(s.submission_id AS BIGINT) ASC
        LIMIT 500`,
-      [ESCROW_CONTRACT_ADDRESS.toLowerCase(), taskId]
+      [ESCROW_CONTRACT_ADDRESS.toLowerCase(), taskId, viewer]
     );
+
     res.json({ submissions: r.rows });
   } catch (e) {
     console.error(e);

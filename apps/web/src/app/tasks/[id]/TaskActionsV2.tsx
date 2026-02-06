@@ -139,7 +139,7 @@ export default function TaskActionsV2({
   async function submitProof() {
     if (!walletClient || !publicClient) return;
     if (!mySubmissionId) {
-      setError('Missing submissionId. Click Start Task first (or wait for the indexer to show your submission).');
+      setError('No submission found yet. Click Start Task first, then wait a moment for the indexer to pick up your submission.');
       return;
     }
     if (!address) return;
@@ -305,13 +305,6 @@ export default function TaskActionsV2({
             <h3>Agent flow</h3>
             <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
               <button className="btn btn-primary" disabled={loading} onClick={startTask}>Start Task</button>
-              <input
-                className="input"
-                style={{ minWidth: 180 }}
-                placeholder="Your submissionId"
-                value={mySubmissionId}
-                onChange={(e) => setMySubmissionId(e.target.value)}
-              />
             </div>
             <div className="form-group mt-2">
               <label>Proof (TEXT — can be a URL, explanation, image link, etc.)</label>
