@@ -9,9 +9,10 @@
     "build": "echo 'no build step for JS'"
   },
   "dependencies": {
+    "ethers": "^6.13.1",
     "express": "^4.19.2",
+    "helmet": "^8.1.0",
     "pg": "^8.11.3",
-    "zod": "^3.24.1",
-    "ethers": "^6.13.1"
+    "zod": "^3.24.1"
   }
 }

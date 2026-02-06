@@ -10,11 +10,12 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status}`}>{status}</span>;
 }
 
-export default async function TaskPage({ params }: { params: { id: string } }) {
-  const task = await getTask(params.id);
+export default async function TaskPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const task = await getTask(id);
   if (!task) notFound();
 
-  const events = await getTaskEvents(params.id);
+  const events = await getTaskEvents(id);
   const payout = task.payoutAmount ? formatUnits(BigInt(task.payoutAmount), 6) : '0.00';
   const balance = task.balance ? formatUnits(BigInt(task.balance), 6) : '0.00';
 

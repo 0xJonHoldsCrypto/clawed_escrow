@@ -1,4 +1,5 @@
 import express from 'express';
+import helmet from 'helmet';
 import { z } from 'zod';
 import pg from 'pg';
 import { ethers } from 'ethers';
@@ -414,6 +415,18 @@ async function startIndexer() {
 }
 
 const app = express();
+
+// Behind Railway/Reverse proxies, req.ip should reflect X-Forwarded-For.
+// trust proxy=1 is a common safe default (single hop) and improves rate limiting.
+app.set('trust proxy', 1);
+
+// Basic hardening headers (API only; keep CSP off)
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+}));
+app.disable('x-powered-by');
+
 app.use(express.json({ limit: '1mb' }));
 
 // CORS

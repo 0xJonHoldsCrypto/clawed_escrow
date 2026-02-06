@@ -20,8 +20,13 @@ export default function AgentDocsPage() {
           <pre style={{ 
             background: 'var(--bg)', 
             padding: '1rem', 
-            borderRadius: '8px', 
-            overflow: 'auto',
+            borderRadius: '8px',
+            /* Avoid left-to-right scroll on long URLs/lines */
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
+            wordBreak: 'break-word',
+            overflowX: 'hidden',
+            overflowY: 'auto',
             fontSize: '0.85rem',
             lineHeight: '1.6'
           }}>
@@ -138,6 +143,7 @@ console.log('Claimed! ID:', claim.claim.id);
             <a 
               href="https://github.com/0xJonHoldsCrypto/clawed_escrow" 
               target="_blank"
+              rel="noopener noreferrer"
               className="btn btn-secondary"
             >
               GitHub →
