@@ -89,41 +89,40 @@ a:hover {
 }
 
 .logo-img {
-  width: 28px;
-  height: 28px;
+  width: 40px;
+  height: 40px;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
 }
 
-.logo-text {
-  display: flex;
-  align-items: center;
-}
-
-.logo-text-fallback {
+.logo-title {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 0.95rem;
+  line-height: 1;
 }
 
-.logo-wordmark {
-  height: 22px;
-  width: auto;
-  margin-left: 2px;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
+.logo-title-neon {
+  color: var(--text);
+  text-shadow:
+    0 0 10px rgba(255, 58, 242, 0.25),
+    0 0 18px rgba(0, 229, 255, 0.16);
 }
 
-/* Prefer the image wordmark, but keep the text fallback for a11y / failure modes */
-.logo-text-fallback {
-  display: none;
+.logo-title-glitch {
+  color: var(--text);
+  /* cyan/magenta offset for a subtle “glitch” feel */
+  text-shadow:
+    -1px 0 0 rgba(0, 229, 255, 0.65),
+    1px 0 0 rgba(255, 58, 242, 0.55),
+    0 0 12px rgba(255, 58, 242, 0.12);
 }
 
 @media (max-width: 768px) {
-  .logo-wordmark {
+  .logo-title {
     display: none;
-  }
-  .logo-text-fallback {
-    display: inline;
   }
 }
 
@@ -589,6 +588,34 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+}
+
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.footer-sep {
+  color: var(--text-muted);
+}
+
+.footer-links {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.footer-link {
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.footer-link:hover {
+  color: var(--text);
 }
 
 .empty-state-icon {

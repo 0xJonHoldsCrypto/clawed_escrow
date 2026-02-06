@@ -5,17 +5,14 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 
 const LOGO_VARIANT = (process.env.NEXT_PUBLIC_LOGO_VARIANT || 'neon').toLowerCase();
 const LOGO_SRC = LOGO_VARIANT === 'glitch' ? '/brand/logo-glitch.png' : '/brand/logo-neon.png';
-const WORDMARK_SRC = LOGO_VARIANT === 'glitch' ? '/brand/wordmark-alt.png' : '/brand/wordmark-neon.png';
-
 export function Header() {
   return (
     <header className="header">
       <div className="header-content">
         <Link href="/" className="logo" aria-label="Clawed Escrow">
-          <img className="logo-img" src={LOGO_SRC} alt="Clawed Escrow logo" width={28} height={28} />
-          <span className="logo-text" aria-hidden>
-            <span className="logo-text-fallback">Clawed Escrow</span>
-            <img className="logo-wordmark" src={WORDMARK_SRC} alt="Clawed Escrow" />
+          <img className="logo-img" src={LOGO_SRC} alt="Clawed Escrow logo" width={40} height={40} />
+          <span className={`logo-title ${LOGO_VARIANT === 'glitch' ? 'logo-title-glitch' : 'logo-title-neon'}`}>
+            Clawed Escrow
           </span>
         </Link>
 
