@@ -696,6 +696,40 @@ app.get('/v2/tasks/:id', async (req, res) => {
   }
 });
 
+// List all tasks that involve a given wallet (requester OR agent submission)
+app.get('/v2/wallets/:address/tasks', async (req, res) => {
+  try {
+    const address = String(req.params.address || '').toLowerCase();
+    if (!/^0x[a-f0-9]{40}$/.test(address)) return res.status(400).json({ error: 'invalid_address' });
+
+    const r = await pool.query(
+      `WITH task_ids AS (
+         SELECT task_id
+         FROM escrow_tasks
+         WHERE chain_id=8453 AND contract_address=$1 AND LOWER(requester)=$2
+         UNION
+         SELECT task_id
+         FROM escrow_submissions
+         WHERE chain_id=8453 AND contract_address=$1 AND LOWER(agent)=$2
+       )
+       SELECT t.*, m.title, m.instructions
+       FROM task_ids i
+       JOIN escrow_tasks t
+         ON t.chain_id=8453 AND t.contract_address=$1 AND t.task_id=i.task_id
+       LEFT JOIN escrow_task_metadata m
+         ON m.chain_id=t.chain_id AND m.contract_address=t.contract_address AND m.task_id=t.task_id
+       ORDER BY COALESCE(t.updated_block, t.created_block) DESC NULLS LAST
+       LIMIT 500`,
+      [ESCROW_CONTRACT_ADDRESS.toLowerCase(), address]
+    );
+
+    res.json({ tasks: r.rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
 // Save offchain title/instructions (so the UI can display human-readable specs).
 // Auth required; wallet must match onchain requester; specHash must match indexer row.
 app.post('/v2/tasks/:id/metadata', requireAuth, async (req, res) => {
