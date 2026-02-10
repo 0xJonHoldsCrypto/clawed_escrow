@@ -18,7 +18,19 @@ function TaskCard({ task }: { task: V2Task }) {
         </div>
 
         <p className="task-card-description">
+          {task.title ? (
+            <>
+              <strong>{task.title}</strong>
+              <br />
+            </>
+          ) : null}
           requester: {task.requester ? `${task.requester.slice(0, 6)}...${task.requester.slice(-4)}` : '—'}
+          {task.instructions ? (
+            <>
+              <br />
+              <span className="text-muted">{task.instructions.slice(0, 160)}{task.instructions.length > 160 ? '…' : ''}</span>
+            </>
+          ) : null}
         </p>
 
         <div className="task-card-footer">

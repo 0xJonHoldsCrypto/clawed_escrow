@@ -346,6 +346,19 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS escrow_task_metadata (
+      chain_id INTEGER NOT NULL,
+      contract_address TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      spec_hash TEXT,
+      title TEXT,
+      instructions TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (chain_id, contract_address, task_id)
+    );
+
     CREATE INDEX IF NOT EXISTS escrow_submission_proofs_lookup
       ON escrow_submission_proofs (chain_id, contract_address, task_id, submission_id, created_at DESC);
 
@@ -600,6 +613,12 @@ const V2ProofSave = z.object({
   txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
 });
 
+const V2TaskMetadataSave = z.object({
+  title: z.string().min(1).max(200),
+  instructions: z.string().min(1).max(20000),
+  specHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/),
+});
+
 // ============ Routes ============
 
 // ===== v2 (onchain) =====
@@ -640,10 +659,77 @@ app.get('/v2/indexer/status', async (req, res) => {
 app.get('/v2/tasks', async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT * FROM escrow_tasks WHERE chain_id=8453 AND contract_address=$1 ORDER BY COALESCE(updated_block, created_block) DESC NULLS LAST LIMIT 200`,
+      `SELECT t.*, m.title, m.instructions
+       FROM escrow_tasks t
+       LEFT JOIN escrow_task_metadata m
+         ON m.chain_id=t.chain_id AND m.contract_address=t.contract_address AND m.task_id=t.task_id
+       WHERE t.chain_id=8453 AND t.contract_address=$1
+       ORDER BY COALESCE(t.updated_block, t.created_block) DESC NULLS LAST
+       LIMIT 200`,
       [ESCROW_CONTRACT_ADDRESS.toLowerCase()]
     );
     res.json({ tasks: r.rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+app.get('/v2/tasks/:id', async (req, res) => {
+  try {
+    const taskId = req.params.id;
+    const r = await pool.query(
+      `SELECT t.*, m.title, m.instructions
+       FROM escrow_tasks t
+       LEFT JOIN escrow_task_metadata m
+         ON m.chain_id=t.chain_id AND m.contract_address=t.contract_address AND m.task_id=t.task_id
+       WHERE t.chain_id=8453 AND t.contract_address=$1 AND t.task_id=$2
+       LIMIT 1`,
+      [ESCROW_CONTRACT_ADDRESS.toLowerCase(), taskId]
+    );
+    const task = r.rows[0] || null;
+    if (!task) return res.status(404).json({ error: 'task_not_found' });
+    res.json({ task });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// Save offchain title/instructions (so the UI can display human-readable specs).
+// Auth required; wallet must match onchain requester; specHash must match indexer row.
+app.post('/v2/tasks/:id/metadata', requireAuth, async (req, res) => {
+  try {
+    const taskId = req.params.id;
+    const parsed = V2TaskMetadataSave.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+    const t = await pool.query(
+      `SELECT requester, spec_hash FROM escrow_tasks WHERE chain_id=8453 AND contract_address=$1 AND task_id=$2 LIMIT 1`,
+      [ESCROW_CONTRACT_ADDRESS.toLowerCase(), taskId]
+    );
+    if (t.rows.length === 0) return res.status(404).json({ error: 'task_not_found' });
+
+    const requester = String(t.rows[0].requester || '').toLowerCase();
+    const specHash = String(t.rows[0].spec_hash || '').toLowerCase();
+
+    if (!requester || requester !== req.wallet) {
+      return res.status(403).json({ error: 'not_requester', message: 'Only the onchain requester can set metadata.' });
+    }
+
+    if (specHash && specHash !== parsed.data.specHash.toLowerCase()) {
+      return res.status(409).json({ error: 'spec_hash_mismatch', onchain: specHash, provided: parsed.data.specHash.toLowerCase() });
+    }
+
+    await pool.query(
+      `INSERT INTO escrow_task_metadata (chain_id, contract_address, task_id, spec_hash, title, instructions, created_by, created_at, updated_at)
+       VALUES (8453, $1, $2, $3, $4, $5, $6, NOW(), NOW())
+       ON CONFLICT (chain_id, contract_address, task_id)
+       DO UPDATE SET spec_hash=EXCLUDED.spec_hash, title=EXCLUDED.title, instructions=EXCLUDED.instructions, updated_at=NOW()`,
+      [ESCROW_CONTRACT_ADDRESS.toLowerCase(), taskId, parsed.data.specHash.toLowerCase(), parsed.data.title, parsed.data.instructions, req.wallet]
+    );
+
+    res.json({ ok: true });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'internal_error' });

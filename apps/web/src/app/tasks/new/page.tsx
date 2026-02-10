@@ -3,17 +3,21 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useAccount, usePublicClient, useWalletClient } from 'wagmi';
+import { useAccount, usePublicClient, useWalletClient, useSignMessage } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 // Header is rendered by the root layout
-import { decodeEventLog, formatUnits, keccak256, parseUnits, toBytes } from 'viem';
+import { decodeEventLog, keccak256, parseUnits, toBytes } from 'viem';
 import { ESCROW_ABI, ERC20_ABI, ESCROW_ADDRESS, USDC_ADDRESS } from '@/lib/contracts';
+import { buildAuthHeaders } from '@/lib/auth';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://clawedescrow-production.up.railway.app';
 
 export default function NewTask() {
   const router = useRouter();
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient();
+  const { signMessageAsync } = useSignMessage();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -101,6 +105,23 @@ export default function NewTask() {
         args: [taskId],
       });
       await publicClient.waitForTransactionReceipt({ hash: fundHash });
+
+      // 4) best-effort: save metadata offchain so the UI can display it (still verifiable via specHash)
+      try {
+        const tid = taskId.toString();
+        const body = { title, instructions, specHash };
+        const path = `/v2/tasks/${tid}/metadata`;
+        const headers = await buildAuthHeaders({
+          address,
+          signMessageAsync,
+          method: 'POST',
+          path,
+          body,
+        });
+        await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+      } catch {
+        // ignore; onchain task still created + funded
+      }
 
       router.push(`/tasks/${taskId.toString()}`);
     } catch (err: any) {

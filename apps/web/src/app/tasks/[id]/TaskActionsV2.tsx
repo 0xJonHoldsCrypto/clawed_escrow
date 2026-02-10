@@ -39,10 +39,24 @@ export default function TaskActionsV2({
   taskId,
   requester,
   payoutAmount,
+  deadline,
+  claimCount,
+  submissionCount,
+  status,
+  specHash,
+  title,
+  instructions,
 }: {
   taskId: string;
   requester: string | null;
   payoutAmount: string | null;
+  deadline: number | null;
+  claimCount: number | null;
+  submissionCount: number | null;
+  status: string;
+  specHash: string | null;
+  title: string | null;
+  instructions: string | null;
 }) {
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
@@ -62,6 +76,10 @@ export default function TaskActionsV2({
   const [mySubmissionId, setMySubmissionId] = useState<string>('');
   const [proofText, setProofText] = useState<string>('');
   const [approveSubmissionId, setApproveSubmissionId] = useState<string>('');
+
+  // requester metadata (offchain)
+  const [metaTitle, setMetaTitle] = useState<string>(title || '');
+  const [metaInstructions, setMetaInstructions] = useState<string>(instructions || '');
 
   async function refresh() {
     try {
@@ -87,6 +105,7 @@ export default function TaskActionsV2({
   }, [taskId, address]);
 
   const payout = payoutAmount ? formatUnits(BigInt(payoutAmount), 6) : null;
+  const deadlinePassed = deadline ? Date.now() / 1000 > deadline : false;
   const recipientFee = payoutAmount ? (BigInt(payoutAmount) * 200n) / 10_000n : null;
   const netPayout = payoutAmount && recipientFee != null ? BigInt(payoutAmount) - recipientFee : null;
   const netPayoutUi = netPayout != null ? formatUnits(netPayout, 6) : null;
@@ -235,6 +254,132 @@ export default function TaskActionsV2({
     }
   }
 
+  async function refundIfNeverClaimedAfterDeadline() {
+    if (!walletClient || !publicClient) return;
+    setLoading(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const ok = window.confirm(
+        `Refund Task #${taskId}?\n\nThis only works if the task was NEVER claimed and the deadline has passed.\n\nProceed?`
+      );
+      if (!ok) return;
+
+      const hash = await walletClient.writeContract({
+        address: ESCROW_ADDRESS,
+        abi: ESCROW_ABI,
+        functionName: 'refundIfNeverClaimedAfterDeadline',
+        args: [BigInt(taskId)],
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      setNotice('Refund transaction confirmed. Waiting for indexer…');
+      await refresh();
+    } catch (e: any) {
+      setError(e?.shortMessage || e?.message || 'Refund failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function cancelIfNoSubmissions() {
+    if (!walletClient || !publicClient) return;
+    setLoading(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const ok = window.confirm(
+        `Cancel Task #${taskId}?\n\nThis only works if there are NO submissions yet.\n\nProceed?`
+      );
+      if (!ok) return;
+
+      const hash = await walletClient.writeContract({
+        address: ESCROW_ADDRESS,
+        abi: ESCROW_ABI,
+        functionName: 'cancelIfNoSubmissions',
+        args: [BigInt(taskId)],
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      setNotice('Cancel transaction confirmed. Waiting for indexer…');
+      await refresh();
+    } catch (e: any) {
+      setError(e?.shortMessage || e?.message || 'Cancel failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function closeAndRefundRemainder() {
+    if (!walletClient || !publicClient) return;
+    setLoading(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const ok = window.confirm(
+        `Close Task #${taskId} and refund remaining escrow?\n\nThis is used to close the task and return unused funds to requester.\n\nProceed?`
+      );
+      if (!ok) return;
+
+      const hash = await walletClient.writeContract({
+        address: ESCROW_ADDRESS,
+        abi: ESCROW_ABI,
+        functionName: 'closeAndRefundRemainder',
+        args: [BigInt(taskId)],
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      setNotice('Close+refund transaction confirmed. Waiting for indexer…');
+      await refresh();
+    } catch (e: any) {
+      setError(e?.shortMessage || e?.message || 'Close+refund failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveMetadata() {
+    if (!address) return;
+    if (!specHash) {
+      setError('Cannot save metadata: specHash missing from indexer (wait a moment and refresh).');
+      return;
+    }
+    const t = metaTitle.trim();
+    const ins = metaInstructions.trim();
+    if (!t || !ins) {
+      setError('Title and instructions are required.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const body = { title: t, instructions: ins, specHash };
+      const path = `/v2/tasks/${taskId}/metadata`;
+      const headers = await buildAuthHeaders({
+        address,
+        signMessageAsync,
+        method: 'POST',
+        path,
+        body,
+      });
+
+      const r = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        throw new Error(data?.error?.message || data?.error || 'Failed to save metadata');
+      }
+
+      setNotice('Saved task title/instructions. (Refresh the page if you don’t see it immediately.)');
+    } catch (e: any) {
+      setError(e?.message || 'Failed to save metadata');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <div className="card mt-2">
       <h2>Actions (Onchain)</h2>
@@ -322,8 +467,67 @@ export default function TaskActionsV2({
             <div className="mt-2">
               <h3>Requester flow</h3>
               <p className="text-muted text-sm">
-                Approve directly from the Submissions list above (no manual submissionId entry).
+                Approve directly from the Submissions list above.
               </p>
+
+              <div className="card mt-2" style={{ background: 'var(--bg)' }}>
+                <h4 style={{ marginTop: 0 }}>Refund / Cancel / Close</h4>
+                <p className="text-muted text-sm" style={{ marginTop: 0 }}>
+                  Status: <span className="font-mono">{status}</span> · claims: {claimCount ?? '—'} · submissions: {submissionCount ?? '—'} · deadline passed: {String(deadlinePassed)}
+                </p>
+
+                <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
+                  <button
+                    className="btn btn-secondary"
+                    disabled={loading}
+                    onClick={cancelIfNoSubmissions}
+                    title="Cancels the task if there are no submissions yet"
+                  >
+                    Cancel (no submissions)
+                  </button>
+
+                  <button
+                    className="btn btn-primary"
+                    disabled={loading}
+                    onClick={refundIfNeverClaimedAfterDeadline}
+                    title="Refunds the requester if the task was never claimed and is past deadline"
+                  >
+                    Refund (never claimed, past deadline)
+                  </button>
+
+                  <button
+                    className="btn btn-secondary"
+                    disabled={loading}
+                    onClick={closeAndRefundRemainder}
+                    title="Closes the task and refunds remaining escrow to requester"
+                  >
+                    Close + refund remainder
+                  </button>
+                </div>
+
+                <p className="text-muted text-sm mt-2">
+                  If a button reverts, it usually means the onchain preconditions aren’t met yet.
+                </p>
+              </div>
+
+              <div className="card mt-2" style={{ background: 'var(--bg)' }}>
+                <h4 style={{ marginTop: 0 }}>Task title / instructions (offchain)</h4>
+                <p className="text-muted text-sm" style={{ marginTop: 0 }}>
+                  Stored offchain but committed to onchain via <span className="font-mono">specHash</span>. Only the requester wallet can set this.
+                </p>
+
+                <div className="form-group">
+                  <label>Title</label>
+                  <input value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} maxLength={200} />
+                </div>
+                <div className="form-group">
+                  <label>Instructions</label>
+                  <textarea rows={6} value={metaInstructions} onChange={(e) => setMetaInstructions(e.target.value)} />
+                </div>
+                <button className="btn btn-success" disabled={loading || !metaTitle.trim() || !metaInstructions.trim()} onClick={saveMetadata}>
+                  Save title + instructions
+                </button>
+              </div>
             </div>
           )}
         </>

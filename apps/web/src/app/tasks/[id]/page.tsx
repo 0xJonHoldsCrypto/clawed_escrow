@@ -53,6 +53,24 @@ export default async function TaskPage({ params }: { params: Promise<{ id: strin
           </div>
 
           <div className="mt-2">
+            {task.title && (
+              <div className="card" style={{ background: 'var(--bg)' }}>
+                <h2 style={{ marginTop: 0 }}>{task.title}</h2>
+                {task.instructions && (
+                  <div style={{ whiteSpace: 'pre-wrap' }} className="text-secondary">
+                    {task.instructions}
+                  </div>
+                )}
+                {!task.instructions && <p className="text-muted">No instructions saved for this task.</p>}
+              </div>
+            )}
+
+            {!task.title && (
+              <p className="text-muted text-sm">
+                No offchain title/instructions saved for this task yet (only <span className="font-mono">specHash</span> exists onchain).
+              </p>
+            )}
+
             <p className="text-muted text-sm">
               Escrow contract: <a href={`https://basescan.org/address/${ESCROW_ADDRESS}`} target="_blank" rel="noopener">{ESCROW_ADDRESS}</a>
             </p>
@@ -88,7 +106,18 @@ export default async function TaskPage({ params }: { params: Promise<{ id: strin
           )}
         </div>
 
-        <TaskActionsV2 taskId={task.id} requester={task.requester} payoutAmount={task.payoutAmount} />
+        <TaskActionsV2
+          taskId={task.id}
+          requester={task.requester}
+          payoutAmount={task.payoutAmount}
+          deadline={task.deadline}
+          claimCount={task.claimCount}
+          submissionCount={task.submissionCount}
+          status={task.status}
+          specHash={task.specHash}
+          title={task.title}
+          instructions={task.instructions}
+        />
     </div>
   );
 }

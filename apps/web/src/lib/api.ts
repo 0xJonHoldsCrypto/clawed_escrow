@@ -16,8 +16,13 @@ export interface V2Task {
   escalationWindow: number | null;
   approvedCount: number | null;
   withdrawnCount: number | null;
+  pendingSubmissions: number | null;
+  submissionCount: number | null;
+  claimCount: number | null;
   specHash: string | null;
   balance: string | null; // USDC minor units as string
+  title: string | null;
+  instructions: string | null;
   createdTx: string | null;
   createdBlock: number | null;
   updatedTx: string | null;
@@ -53,8 +58,13 @@ function hydrateV2Task(row: any): V2Task {
     escalationWindow: toNum(row.escalation_window),
     approvedCount: toNum(row.approved_count),
     withdrawnCount: toNum(row.withdrawn_count),
+    pendingSubmissions: toNum(row.pending_submissions),
+    submissionCount: toNum(row.submission_count),
+    claimCount: toNum(row.claim_count),
     specHash: row.spec_hash ?? null,
     balance: row.balance ?? null,
+    title: row.title ?? null,
+    instructions: row.instructions ?? null,
     createdTx: row.created_tx ?? null,
     createdBlock: toNum(row.created_block),
     updatedTx: row.updated_tx ?? null,
@@ -69,8 +79,10 @@ export async function getTasks(): Promise<V2Task[]> {
 }
 
 export async function getTask(id: string): Promise<V2Task | null> {
-  const tasks = await getTasks();
-  return tasks.find((t) => t.id === String(id)) ?? null;
+  const res = await fetch(`${API_URL}/v2/tasks/${id}`, { cache: 'no-store' });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.task ? hydrateV2Task(data.task) : null;
 }
 
 export async function getTaskEvents(taskId: string): Promise<any[]> {
