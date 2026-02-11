@@ -101,23 +101,20 @@ export default function MyTasksPage() {
                 <Link key={t.task_id} href={`/tasks/${t.task_id}`} className="task-card">
                   <div className="card card-clickable">
                     <div className="task-card-header">
-                      <h3 className="task-card-title">Task #{t.task_id}</h3>
+                      <div>
+                        <h3 className="task-card-title" style={{ marginBottom: 0 }}>{(t.title || '').trim() || 'Untitled task'}</h3>
+                        <div className="text-muted text-sm">Task #{t.task_id}</div>
+                      </div>
                       <span className={`badge badge-${mapTaskStatus(t.status)}`}>{mapTaskStatus(t.status)}</span>
                     </div>
                     <p className="task-card-description">
-                      {t.title ? (
-                        <>
-                          <strong>{t.title}</strong>
-                          <br />
-                        </>
-                      ) : null}
+                      <span className="text-muted">
+                        {(t.instructions || '').trim()
+                          ? `${String(t.instructions).slice(0, 160)}${String(t.instructions).length > 160 ? '…' : ''}`
+                          : 'No description saved yet.'}
+                      </span>
+                      <br />
                       payout: {payout} USDC
-                      {t.instructions ? (
-                        <>
-                          <br />
-                          <span className="text-muted">{String(t.instructions).slice(0, 160)}{String(t.instructions).length > 160 ? '…' : ''}</span>
-                        </>
-                      ) : null}
                     </p>
                   </div>
                 </Link>
@@ -137,19 +134,20 @@ export default function MyTasksPage() {
                 <Link key={t.task_id} href={`/tasks/${t.task_id}`} className="task-card">
                   <div className="card card-clickable">
                     <div className="task-card-header">
-                      <h3 className="task-card-title">Task #{t.task_id}</h3>
+                      <div>
+                        <h3 className="task-card-title" style={{ marginBottom: 0 }}>{(t.title || '').trim() || 'Untitled task'}</h3>
+                        <div className="text-muted text-sm">Task #{t.task_id}</div>
+                      </div>
                       <span className={`badge badge-${mapTaskStatus(t.status)}`}>{mapTaskStatus(t.status)}</span>
                     </div>
                     <p className="task-card-description">
-                      requester: {t.requester ? `${t.requester.slice(0, 6)}...${t.requester.slice(-4)}` : '—'}
+                      <span className="text-muted">
+                        {(t.instructions || '').trim()
+                          ? `${String(t.instructions).slice(0, 160)}${String(t.instructions).length > 160 ? '…' : ''}`
+                          : 'No description saved yet.'}
+                      </span>
                       <br />
-                      payout: {payout} USDC
-                      {t.title ? (
-                        <>
-                          <br />
-                          <strong>{t.title}</strong>
-                        </>
-                      ) : null}
+                      requester: {t.requester ? `${t.requester.slice(0, 6)}...${t.requester.slice(-4)}` : '—'} · payout: {payout} USDC
                     </p>
                   </div>
                 </Link>

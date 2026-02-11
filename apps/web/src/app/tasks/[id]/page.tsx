@@ -27,7 +27,10 @@ export default async function TaskPage({ params }: { params: Promise<{ id: strin
 
         <div className="card card-highlight">
           <div className="flex-between mb-2">
-            <h1 style={{ marginBottom: 0 }}>Task #{task.id}</h1>
+            <div>
+              <h1 style={{ marginBottom: 0 }}>{task.title || 'Untitled task'}</h1>
+              <div className="text-muted text-sm">Task #{task.id}</div>
+            </div>
             <StatusBadge status={task.status} />
           </div>
 
@@ -53,23 +56,19 @@ export default async function TaskPage({ params }: { params: Promise<{ id: strin
           </div>
 
           <div className="mt-2">
-            {task.title && (
-              <div className="card" style={{ background: 'var(--bg)' }}>
-                <h2 style={{ marginTop: 0 }}>{task.title}</h2>
-                {task.instructions && (
-                  <div style={{ whiteSpace: 'pre-wrap' }} className="text-secondary">
-                    {task.instructions}
-                  </div>
-                )}
-                {!task.instructions && <p className="text-muted">No instructions saved for this task.</p>}
-              </div>
-            )}
-
-            {!task.title && (
-              <p className="text-muted text-sm">
-                No offchain title/instructions saved for this task yet (only <span className="font-mono">specHash</span> exists onchain).
-              </p>
-            )}
+            <div className="card" style={{ background: 'var(--bg)' }}>
+              <h2 style={{ marginTop: 0 }}>Description</h2>
+              {task.instructions ? (
+                <div style={{ whiteSpace: 'pre-wrap' }} className="text-secondary">
+                  {task.instructions}
+                </div>
+              ) : (
+                <p className="text-muted">
+                  No description saved for this task yet. The task is still valid onchain (via <span className="font-mono">specHash</span>), but
+                  the requester needs to save a title + description once for better UX.
+                </p>
+              )}
+            </div>
 
             <p className="text-muted text-sm">
               Escrow contract: <a href={`https://basescan.org/address/${ESCROW_ADDRESS}`} target="_blank" rel="noopener">{ESCROW_ADDRESS}</a>

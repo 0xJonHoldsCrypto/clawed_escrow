@@ -8,35 +8,38 @@ function StatusBadge({ status }: { status: string }) {
 
 function TaskCard({ task }: { task: V2Task }) {
   const payout = task.payoutAmount ? formatUnits(BigInt(task.payoutAmount), 6) : '0.00';
+  const title = (task.title || '').trim() || 'Untitled task';
+  const description = (task.instructions || '').trim();
 
   return (
     <Link href={`/tasks/${task.id}`} className="task-card">
       <div className="card card-clickable">
         <div className="task-card-header">
-          <h3 className="task-card-title">Task #{task.id}</h3>
+          <div>
+            <h3 className="task-card-title" style={{ marginBottom: 0 }}>{title}</h3>
+            <div className="text-muted text-sm">Task #{task.id}</div>
+          </div>
           <StatusBadge status={task.status} />
         </div>
 
         <p className="task-card-description">
-          {task.title ? (
-            <>
-              <strong>{task.title}</strong>
-              <br />
-            </>
-          ) : null}
-          requester: {task.requester ? `${task.requester.slice(0, 6)}...${task.requester.slice(-4)}` : '—'}
-          {task.instructions ? (
-            <>
-              <br />
-              <span className="text-muted">{task.instructions.slice(0, 160)}{task.instructions.length > 160 ? '…' : ''}</span>
-            </>
-          ) : null}
+          <span className="text-muted">
+            {description ? (
+              <>
+                {description.slice(0, 160)}
+                {description.length > 160 ? '…' : ''}
+              </>
+            ) : (
+              <>No description saved yet.</>
+            )}
+          </span>
         </p>
 
         <div className="task-card-footer">
           <div className="task-payout">💰 {payout} USDC</div>
           <span className="task-meta">
-            {task.deadline ? `deadline: ${new Date(task.deadline * 1000).toLocaleDateString()}` : ''}
+            requester: {task.requester ? `${task.requester.slice(0, 6)}...${task.requester.slice(-4)}` : '—'}
+            {task.deadline ? ` · deadline: ${new Date(task.deadline * 1000).toLocaleDateString()}` : ''}
           </span>
         </div>
       </div>
