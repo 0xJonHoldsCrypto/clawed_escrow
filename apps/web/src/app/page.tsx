@@ -47,13 +47,18 @@ function TaskCard({ task }: { task: V2Task }) {
   );
 }
 
-export default async function Home() {
+export default async function Home({ searchParams }: { searchParams?: Promise<{ [key: string]: string | string[] | undefined }> }) {
   const tasks = await getTasks();
+  const sp = (await searchParams) || {};
+  const all = sp.all === '1' || sp.all === 'true';
+
   const hideIds = (process.env.NEXT_PUBLIC_HIDE_TASK_IDS || '')
     .split(',')
     .map((x) => x.trim())
     .filter(Boolean);
-  const visibleTasks = hideIds.length ? tasks.filter((t) => !hideIds.includes(String(t.id))) : tasks;
+  const withoutHidden = hideIds.length ? tasks.filter((t) => !hideIds.includes(String(t.id))) : tasks;
+
+  const visibleTasks = all ? withoutHidden : withoutHidden.filter((t) => t.status === 'created' || t.status === 'funded');
 
   return (
     <div className="container">
@@ -62,7 +67,12 @@ export default async function Home() {
         <p>Tasks are enforced by the ClawedEscrow contract on Base. The web app reads onchain state and shows task activity.</p>
       </div>
 
-      <h2>📋 Tasks</h2>
+      <div className="flex-between" style={{ alignItems: 'baseline' }}>
+        <h2>📋 Tasks</h2>
+        <Link className="text-muted text-sm" href={all ? '/' : '/?all=1'}>
+          {all ? 'Show active only' : 'Show all (incl. closed)'}
+        </Link>
+      </div>
       {visibleTasks.length === 0 ? (
         <div className="card">
           <div className="empty-state">

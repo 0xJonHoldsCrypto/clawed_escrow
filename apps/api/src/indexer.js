@@ -176,7 +176,27 @@ export async function processEscrowLog({ pool, log }) {
       [CHAIN_ID, ESCROW_CONTRACT_ADDRESS.toLowerCase(), taskId, escrowedAmount, log.blockNumber, log.transactionHash]
     );
   }
+
+  // Task terminal states projection
+  // enum TaskStatus { None, Created, Funded, Cancelled, Completed, Closed }
+  // - TaskCancelled -> Cancelled (3)
+  // - TaskClosed -> Closed (5)
+  // - TaskRefunded -> Cancelled (3)
+  if (taskId && (eventName === 'TaskCancelled' || eventName === 'TaskClosed' || eventName === 'TaskRefunded')) {
+    const status = eventName === 'TaskClosed' ? 5 : 3;
+    await pool.query(
+      `UPDATE escrow_tasks
+         SET status=$4,
+             balance=0,
+             updated_block=$5,
+             updated_tx=$6,
+             updated_at=NOW()
+       WHERE chain_id=$1 AND contract_address=$2 AND task_id=$3`,
+      [CHAIN_ID, ESCROW_CONTRACT_ADDRESS.toLowerCase(), taskId, status, log.blockNumber, log.transactionHash]
+    );
+  }
 }
+
 
 export async function indexOnce({ pool, confirmations = 15, batchBlocks = 1500 }) {
   const head = await baseProvider.getBlockNumber();
